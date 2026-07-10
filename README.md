@@ -1,5 +1,7 @@
 # Figma Live Vector Path Warp
 
+![Figma Live Vector Path Warp](docs/hero.png)
+
 An open-source Figma plugin that deforms vector artwork along a Bezier path instead of placing rigid copies along a line.
 
 The plugin is designed for pattern-brush-like workflows: a source layer is flattened to editable vector geometry, mapped to a target path by arc length, and previewed directly on the Figma canvas.
@@ -17,6 +19,12 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 - Scale/thickness and tile-scale ratio lock.
 - Snapshot behavior for previous results when a result is moved, renamed, copied, or replaced through Start.
 - No network requests or API keys. The plugin manifest uses `networkAccess: { "allowedDomains": ["none"] }`.
+
+## Interface
+
+The plugin provides live canvas preview, repeat and stretch fitting, thickness and tile-scale controls, path smoothing, and a lock for preserving the source pattern ratio.
+
+![Live Vector Path Warp interface](docs/plugin-ui.png)
 
 ## Install in Figma
 
