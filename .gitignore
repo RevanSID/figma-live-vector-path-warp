@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+npm-debug.log*
+.env
+.env.*
+*.log
+.idea/
+.vscode/
+
+# Local preview artifacts
+ui-preview.png

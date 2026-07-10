@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Vector Path Warp</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --text: #f7f8fb;
+        --muted: rgba(244, 247, 255, 0.66);
+        --glass: rgba(20, 22, 34, 0.72);
+        --glass-control: rgba(255, 255, 255, 0.09);
+        --glass-control-hover: rgba(255, 255, 255, 0.14);
+        --glass-border: rgba(255, 255, 255, 0.18);
+        --track: rgba(255, 255, 255, 0.18);
+        --accent: #0a84ff;
+        --accent-2: #5de1d4;
+        --danger: #ff8b82;
+        --success: #64d98b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        color: var(--text);
+        background: linear-gradient(90deg, #0a0a1a 0%, #1a0a3a 55%, #0a1a3a 100%);
+        font: 12px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      main {
+        position: relative;
+        display: block;
+        width: 100%;
+        min-height: 100vh;
+        padding: 16px;
+        overflow: hidden;
+      }
+
+      .glass-card {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        align-content: start;
+        gap: 20px;
+        width: 100%;
+        padding: 16px;
+        border-radius: 28px;
+      }
+
+      .warp-preview {
+        position: absolute;
+        z-index: 0;
+        top: 333px;
+        left: 0;
+        width: 320px;
+        height: 244px;
+        opacity: 1;
+        pointer-events: none;
+        filter: none;
+      }
+
+      .warp-preview img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      header,
+      .options,
+      .controls,
+      .field,
+      button {
+        position: relative;
+        z-index: 1;
+      }
+
+      h1,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 22px;
+        font-weight: 650;
+        line-height: 1.18;
+        letter-spacing: 0;
+      }
+
+      #status {
+        position: relative;
+        margin-top: 7px;
+        padding-left: 13px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.42;
+      }
+
+      #status::before {
+        position: absolute;
+        top: 0.52em;
+        left: 0;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.38);
+        content: "";
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05);
+      }
+
+      #status.success::before {
+        background: var(--success);
+        box-shadow: 0 0 0 3px rgba(100, 217, 139, 0.13);
+      }
+
+      #status[data-state="source"]::before {
+        background: #ffd65a;
+        box-shadow: 0 0 0 3px rgba(255, 214, 90, 0.13);
+      }
+
+      #status[data-state="path"]::before {
+        background: #64d2ff;
+        box-shadow: 0 0 0 3px rgba(100, 210, 255, 0.14);
+      }
+
+      #status[data-state="ready"]::before {
+        background: var(--success);
+        box-shadow: 0 0 0 4px rgba(100, 217, 139, 0.16), 0 0 14px rgba(100, 217, 139, 0.52);
+      }
+
+      #status[data-state="invalid"]::before {
+        background: var(--danger);
+        box-shadow: 0 0 0 3px rgba(255, 139, 130, 0.13);
+      }
+
+      #status.error {
+        color: var(--danger);
+      }
+
+      #status.error::before {
+        background: var(--danger);
+        box-shadow: 0 0 0 3px rgba(255, 139, 130, 0.13);
+      }
+
+      .options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .toggle {
+        isolation: isolate;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-width: 0;
+        height: 36px;
+        padding: 0 12px;
+        overflow: hidden;
+        border: 1px solid var(--glass-border);
+        border-radius: 8px;
+        background: var(--glass-control);
+        font-weight: 520;
+        cursor: pointer;
+        transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+
+      .toggle::before {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        border-radius: inherit;
+        background: linear-gradient(112deg, transparent 18%, rgba(255, 255, 255, 0.16) 46%, transparent 72%);
+        content: "";
+        opacity: 0;
+        transform: translateX(-38%);
+        transition: opacity 180ms ease, transform 240ms ease;
+      }
+
+      .toggle > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      .toggle:hover {
+        border-color: rgba(255, 255, 255, 0.28);
+        background: var(--glass-control-hover);
+      }
+
+      .toggle:hover::before {
+        opacity: 1;
+        transform: translateX(38%);
+      }
+
+      .toggle:has(input:checked) {
+        border-color: rgba(130, 190, 255, 0.38);
+        background: linear-gradient(145deg, rgba(255, 255, 255, 0.14), rgba(70, 123, 206, 0.11));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      }
+
+      .toggle:active {
+        transform: scale(0.985);
+      }
+
+      .toggle span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      input[type="checkbox"] {
+        position: relative;
+        flex: 0 0 auto;
+        width: 17px;
+        height: 17px;
+        margin: 0;
+        border: 1px solid rgba(255, 255, 255, 0.34);
+        border-radius: 5px;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+      }
+
+      input[type="checkbox"]::after {
+        position: absolute;
+        top: 2px;
+        left: 5px;
+        width: 4px;
+        height: 8px;
+        border-right: 2px solid var(--accent);
+        border-bottom: 2px solid var(--accent);
+        content: "";
+        opacity: 0;
+        transform: rotate(45deg) scale(0.7);
+        transition: opacity 120ms ease, transform 120ms ease;
+      }
+
+      input[type="checkbox"]:checked {
+        border-color: rgba(118, 185, 255, 0.92);
+        background: #ffffff;
+        box-shadow: 0 3px 10px rgba(10, 132, 255, 0.28);
+      }
+
+      input[type="checkbox"]:checked::after {
+        opacity: 1;
+        transform: rotate(45deg) scale(1);
+      }
+
+      .controls {
+        display: grid;
+        gap: 15px;
+      }
+
+      .slider {
+        display: grid;
+        gap: 8px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      output {
+        min-width: 42px;
+        color: var(--muted);
+        text-align: right;
+        font-weight: 560;
+        font-variant-numeric: tabular-nums;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        height: 18px;
+        margin: 0;
+        border: 0;
+        border-radius: 9px;
+        outline: none;
+        appearance: none;
+        background:
+          linear-gradient(
+            90deg,
+            var(--accent) 0%,
+            var(--accent-2) var(--range-progress, 50%),
+            var(--track) var(--range-progress, 50%),
+            var(--track) 100%
+          ) center / 100% 6px no-repeat;
+        cursor: pointer;
+        transition: filter 150ms ease;
+      }
+
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 6px;
+        border-radius: 3px;
+        background: transparent;
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        width: 18px;
+        height: 18px;
+        margin-top: -6px;
+        border: 0;
+        border-radius: 50%;
+        appearance: none;
+        background: #ffffff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.3);
+        transition: box-shadow 150ms ease, transform 150ms ease;
+      }
+
+      input[type="range"]:hover {
+        filter: brightness(1.08);
+      }
+
+      input[type="range"]:hover::-webkit-slider-thumb {
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4), 0 0 0 4px rgba(10, 132, 255, 0.16);
+      }
+
+      input[type="range"]:active::-webkit-slider-thumb {
+        transform: scale(1.12);
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field-title {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .select-wrap {
+        position: relative;
+        border-radius: 14px;
+        transition: box-shadow 160ms ease;
+      }
+
+      .select-wrap:focus-within {
+        box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.15), 0 10px 24px rgba(0, 0, 0, 0.22);
+      }
+
+      .select-wrap::after {
+        position: absolute;
+        top: 50%;
+        right: 16px;
+        width: 7px;
+        height: 7px;
+        border-right: 1.5px solid rgba(255, 255, 255, 0.74);
+        border-bottom: 1.5px solid rgba(255, 255, 255, 0.74);
+        content: "";
+        pointer-events: none;
+        transform: translateY(-70%) rotate(45deg);
+      }
+
+      select {
+        width: 100%;
+        height: 44px;
+        padding: 0 42px 0 14px;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 14px;
+        outline: none;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.11);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+        cursor: pointer;
+        transition: background-color 150ms ease, border-color 150ms ease;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+
+      select:hover {
+        border-color: rgba(255, 255, 255, 0.34);
+        background: rgba(255, 255, 255, 0.15);
+      }
+
+      button {
+        isolation: isolate;
+        overflow: hidden;
+        width: 100%;
+        height: 48px;
+        border: 1px solid rgba(255, 255, 255, 0.26);
+        border-radius: 999px;
+        background: linear-gradient(100deg, #087cff, #22b7ff 62%, #65d8f2);
+        color: #ffffff;
+        font-size: 14px;
+        font-weight: 750;
+        cursor: pointer;
+        box-shadow:
+          inset 0 -1px 2px rgba(255, 255, 255, 0.3),
+          0 12px 24px rgba(10, 132, 255, 0.32);
+        transition: filter 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+      }
+
+      button::before {
+        position: absolute;
+        inset: -60% -20%;
+        z-index: 0;
+        background: linear-gradient(105deg, transparent 36%, rgba(255, 255, 255, 0.32) 50%, transparent 64%);
+        content: "";
+        transform: translateX(-55%);
+        transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+
+      button span {
+        position: relative;
+        z-index: 1;
+      }
+
+      button:hover {
+        filter: brightness(1.08);
+        box-shadow:
+          inset 0 -1px 2px rgba(255, 255, 255, 0.36),
+          0 15px 28px rgba(10, 132, 255, 0.4);
+      }
+
+      button:hover::before {
+        transform: translateX(55%);
+      }
+
+      button:active {
+        transform: scale(0.985);
+      }
+
+      :focus-visible {
+        outline: 2px solid rgba(126, 195, 255, 0.94);
+        outline-offset: 3px;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      @media (prefers-reduced-transparency: reduce) {
+        body {
+          background: #111622;
+        }
+
+        main,
+        .toggle,
+        select {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
+        main {
+          background: #1b2030;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="warp-preview" aria-hidden="true"><!-- WARP_PREVIEW --></div>
+
+      <div class="glass-card">
+        <header>
+          <h1>Live Vector Path Warp</h1>
+          <p id="status" data-state="none" role="status" aria-live="polite">Select a source and a vector path.</p>
+        </header>
+
+        <section class="options" aria-label="Preview options">
+          <label class="toggle">
+            <span>Live Preview</span>
+            <input id="livePreview" type="checkbox" checked />
+          </label>
+
+          <label class="toggle">
+            <span>Lock scale</span>
+            <input id="lockScale" type="checkbox" checked />
+          </label>
+        </section>
+
+        <section class="controls" aria-label="Warp controls">
+          <label class="slider">
+            <span class="row">
+              <span>Scale/Thickness</span>
+              <output id="scaleValue">100%</output>
+            </span>
+            <input id="scale" type="range" min="10" max="300" step="1" value="100" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
+              <span>Tile Scale</span>
+              <output id="tileScaleValue">100%</output>
+            </span>
+            <input id="tileScale" type="range" min="10" max="300" step="1" value="100" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
+              <span>Smoothness</span>
+              <output id="smoothnessValue">4</output>
+            </span>
+            <input id="smoothness" type="range" min="1" max="10" step="1" value="4" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
+              <span>Path Smoothing</span>
+              <output id="pathSmoothingValue">2</output>
+            </span>
+            <input id="pathSmoothing" type="range" min="0" max="10" step="1" value="2" />
+          </label>
+        </section>
+
+        <label class="field">
+          <span class="field-title">Fitting Method</span>
+          <span class="select-wrap">
+            <select id="fit">
+              <option value="repeat" selected>Repeat</option>
+              <option value="stretch">Stretch to Fit</option>
+            </select>
+          </span>
+        </label>
+
+        <button id="start" type="button"><span>Start</span></button>
+      </div>
+    </main>
+
+    <!-- UI_SCRIPT -->
+  </body>
+</html>
