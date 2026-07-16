@@ -64,6 +64,8 @@ interface LinkedState {
   targetId: string;
   outputId?: string;
   outputMeta?: OutputMeta;
+  sourceFromOutput: boolean;
+  targetFromOutput: boolean;
 }
 
 interface OutputMeta {
@@ -81,6 +83,12 @@ interface WarpedPiece {
   network: VectorNetwork;
 }
 
+interface OutputFrameResult {
+  frame: FrameNode;
+  sourceSnapshot: SceneNode;
+  targetGuide: VectorNode;
+}
+
 interface RegionPart {
   tileIndex: number;
   regionIndex: number;
@@ -93,6 +101,8 @@ interface RegionPart {
 const EPSILON = 1e-6;
 const TARGET_SAMPLE_PX = 3;
 const OUTPUT_NAME_PREFIX = "Live Vector Path Warp";
+const OUTPUT_SOURCE_NAME = "__Live Vector Path Warp Source Snapshot";
+const OUTPUT_TARGET_NAME = "__Live Vector Path Warp Editable Path";
 const SNAPSHOT_GAP = 24;
 
 let settings: UiSettings = {
@@ -117,8 +127,9 @@ let autoArrangeSnapshotIds: string[] = [];
 figma.showUI(__html__, { width: 320, height: 650, themeColors: true });
 
 figma.on("selectionchange", () => {
+  const restored = restoreLinkedOutputFromSelection();
   postSelectionStatus();
-  scheduleRender("selection");
+  scheduleRender(restored ? "output selection" : "selection", restored ? 20 : 140, restored);
 });
 
 figma.ui.onmessage = (message: UiMessage) => {
@@ -134,7 +145,9 @@ figma.ui.onmessage = (message: UiMessage) => {
 };
 
 void initializeDocumentWatcher();
+const restoredOnLaunch = restoreLinkedOutputFromSelection();
 postSelectionStatus();
+if (restoredOnLaunch) scheduleRender("restore on launch", 20, true);
 
 async function initializeDocumentWatcher() {
   try {
@@ -151,6 +164,13 @@ async function initializeDocumentWatcher() {
 }
 
 function startFromSelection() {
+  if (restoreLinkedOutputFromSelection()) {
+    postStatus("Live frame restored. Editable path is selected.");
+    lastRenderKey = "";
+    scheduleRender("restore", 20, true);
+    return;
+  }
+
   const selection = figma.currentPage.selection.filter((node) => !isCurrentOutput(node));
   if (selection.length !== 2) {
     postStatus("Нужно выделить ровно 2 слоя: source и vector path.", true);
@@ -167,7 +187,9 @@ function startFromSelection() {
     sourceId: resolved.source.id,
     targetId: resolved.target.id,
     outputId: linked?.outputId,
-    outputMeta: linked?.outputMeta
+    outputMeta: linked?.outputMeta,
+    sourceFromOutput: false,
+    targetFromOutput: false
   };
   detachOutputOnNextRender = linked.outputId !== undefined;
   arrangeSnapshotsOnNextRender = linked.outputId !== undefined;
@@ -252,10 +274,14 @@ async function renderLivePreview(_reason: string, force = false) {
           }];
 
     const clipNetwork = buildPathEnvelopeNetwork(arcTable, sourceBounds.height * settings.thicknessScale);
-    const output = await createOutputFrame(flattened, target, warpedPieces, clipNetwork, 0);
-    linked.outputId = output.id;
-    linked.outputMeta = captureOutputMeta(output);
-    if (arrangeSnapshotsOnNextRender) await arrangeSnapshotsRightOf(output);
+    const output = await createOutputFrame(flattened, source, target, warpedPieces, clipNetwork, 0);
+    linked.outputId = output.frame.id;
+    linked.outputMeta = captureOutputMeta(output.frame);
+    linked.targetId = output.targetGuide.id;
+    linked.targetFromOutput = true;
+    if (linked.sourceFromOutput) linked.sourceId = output.sourceSnapshot.id;
+    if (arrangeSnapshotsOnNextRender) await arrangeSnapshotsRightOf(output.frame);
+    selectEditablePath(output.targetGuide);
     const segmentCount = warpedPieces.reduce((sum, piece) => sum + piece.network.segments.length, 0);
     postStatus(`Preview updated: ${source.name}. Tile-stacked vector. Tiles: ${warpedPieces.length}. Segments: ${segmentCount}.`);
   } catch (error) {
@@ -270,9 +296,13 @@ async function renderLivePreview(_reason: string, force = false) {
 }
 
 function flattenSourceToVector(source: SceneNode): VectorNode {
+  const sourceTransform = source.absoluteTransform;
   const clone = source.clone();
   clone.name = `${source.name} - warp source flatten`;
   figma.currentPage.appendChild(clone);
+  clone.locked = false;
+  clone.visible = true;
+  clone.relativeTransform = sourceTransform;
   insertContainerBackgroundIntoClone(clone, source);
   const topLevelOutlines = outlineStrokesBeforeFlatten(clone);
   return figma.flatten([clone, ...topLevelOutlines], figma.currentPage);
@@ -280,18 +310,21 @@ function flattenSourceToVector(source: SceneNode): VectorNode {
 
 async function createOutputFrame(
   flattened: VectorNode,
+  source: SceneNode,
   target: VectorNode,
   warpedPieces: WarpedPiece[],
   clipNetwork: VectorNetwork,
   skipRegionCount: number
-): Promise<FrameNode> {
+): Promise<OutputFrameResult> {
   const previous = linked?.outputId ? await figma.getNodeByIdAsync(linked.outputId) : null;
+  const previousScene = previous && isSceneNode(previous) ? previous : null;
+  const previousParent = previousScene?.parent && hasChildren(previousScene.parent) ? previousScene.parent : null;
+  const previousIndex = previousParent && previousScene ? previousParent.children.indexOf(previousScene) : -1;
+  let keepPrevious = false;
   if (previous && "remove" in previous) {
-    const keepPrevious = detachOutputOnNextRender || (isSceneNode(previous) && isOutputTouched(previous));
+    keepPrevious = detachOutputOnNextRender || (previousScene !== null && isOutputTouched(previousScene));
     if (keepPrevious) {
-      if (detachOutputOnNextRender && isSceneNode(previous)) rememberAutoArrangeSnapshot(previous);
-    } else {
-      previous.remove();
+      if (detachOutputOnNextRender && previousScene) rememberAutoArrangeSnapshot(previousScene);
     }
   }
 
@@ -301,8 +334,13 @@ async function createOutputFrame(
   const frameWidth = Math.max(1, networkBounds.width + padding * 2);
   const frameHeight = Math.max(1, networkBounds.height + padding * 2);
 
-  const parent = target.parent && hasChildren(target.parent) ? target.parent : figma.currentPage;
-  const targetIndex = parent.children.indexOf(target);
+  const reuseOutputPlacement = linked?.targetFromOutput === true && previousParent !== null && previousIndex >= 0;
+  const parent = reuseOutputPlacement
+    ? previousParent
+    : target.parent && hasChildren(target.parent)
+      ? target.parent
+      : figma.currentPage;
+  const targetIndex = reuseOutputPlacement ? previousIndex : parent.children.indexOf(target);
 
   const frame = figma.createFrame();
   frame.name = `${OUTPUT_NAME_PREFIX} - multi-tile - ${flattened.name.replace(" - warp source flatten", "")}`;
@@ -312,6 +350,13 @@ async function createOutputFrame(
   frame.resizeWithoutConstraints(frameWidth, frameHeight);
   frame.relativeTransform = absolutePageTransformForParent(parent, frameOrigin);
   parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
+
+  const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, OUTPUT_SOURCE_NAME, false);
+  const targetGuide = cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
+  if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
+  frame.insertChild(0, targetGuide);
+
+  if (previous && !keepPrevious) previous.remove();
 
   const parts = buildTileStackedParts(warpedPieces, flattened, skipRegionCount);
   flattened.remove();
@@ -331,9 +376,9 @@ async function createOutputFrame(
     vector.strokes = part.strokes ? [...part.strokes] : [];
   }
 
-  frame.expanded = false;
+  frame.expanded = true;
   frame.locked = false;
-  return frame;
+  return { frame, sourceSnapshot, targetGuide };
 }
 
 function buildRegionStackedParts(warpedPieces: WarpedPiece[], flattened: VectorNode, skipRegionCount: number): RegionPart[] {
@@ -648,6 +693,27 @@ function absolutePageTransformForParent(parent: BaseNode & ChildrenMixin, pageOr
     [1, 0, pageOrigin.x],
     [0, 1, pageOrigin.y]
   ]);
+}
+
+function relativeTransformForParent(parent: BaseNode & ChildrenMixin, absoluteTransform: Transform): Transform {
+  if (parent.type === "PAGE") return absoluteTransform;
+  return multiplyTransform(invertTransform((parent as SceneNode).absoluteTransform), absoluteTransform);
+}
+
+function cloneSceneNodeIntoParent(source: SceneNode, parent: BaseNode & ChildrenMixin, name: string, visible: boolean): SceneNode {
+  const sourceTransform = source.absoluteTransform;
+  const clone = source.clone();
+  parent.appendChild(clone);
+  clone.locked = false;
+  clone.relativeTransform = relativeTransformForParent(parent, sourceTransform);
+  clone.name = name;
+  clone.visible = visible;
+  return clone;
+}
+
+function selectEditablePath(path: VectorNode) {
+  figma.currentPage.selection = [path];
+  figma.viewport.scrollAndZoomIntoView([path]);
 }
 
 function translateNetwork(network: VectorNetwork, dx: number, dy: number): VectorNetwork {
@@ -1488,14 +1554,61 @@ function isCurrentOutput(node: BaseNode): boolean {
   return linked?.outputId === node.id;
 }
 
+function findEmbeddedOutputParts(frame: FrameNode): { sourceSnapshot: SceneNode; targetGuide: VectorNode } | null {
+  if (!frame.name.startsWith(OUTPUT_NAME_PREFIX)) return null;
+  const sourceSnapshot = frame.children.find((child) => child.name === OUTPUT_SOURCE_NAME && isSceneNode(child));
+  const targetGuide = frame.children.find((child): child is VectorNode => child.type === "VECTOR" && child.name === OUTPUT_TARGET_NAME);
+  if (!sourceSnapshot || !targetGuide) return null;
+  return { sourceSnapshot, targetGuide };
+}
+
+function restoreLinkedOutputFromSelection(): boolean {
+  const selection = figma.currentPage.selection;
+  if (selection.length !== 1 || selection[0].type !== "FRAME") return false;
+  const frame = selection[0];
+  const embedded = findEmbeddedOutputParts(frame);
+  if (!embedded) return false;
+
+  const alreadyLinked =
+    linked?.outputId === frame.id &&
+    linked.sourceId === embedded.sourceSnapshot.id &&
+    linked.targetId === embedded.targetGuide.id;
+  if (alreadyLinked) return false;
+
+  linked = {
+    sourceId: embedded.sourceSnapshot.id,
+    targetId: embedded.targetGuide.id,
+    outputId: frame.id,
+    outputMeta: captureOutputMeta(frame),
+    sourceFromOutput: true,
+    targetFromOutput: true
+  };
+  detachOutputOnNextRender = false;
+  arrangeSnapshotsOnNextRender = false;
+  lastRenderKey = "";
+  return true;
+}
+
 function postSelectionStatus() {
-  const selection = figma.currentPage.selection.filter((node) => !isCurrentOutput(node));
+  const rawSelection = figma.currentPage.selection;
+  if (rawSelection.length === 1 && rawSelection[0].type === "FRAME" && findEmbeddedOutputParts(rawSelection[0])) {
+    figma.ui.postMessage({ type: "selection", state: "ready", message: "Live frame selected — path editing is ready." });
+    return;
+  }
+
+  const selection = rawSelection.filter((node) => !isCurrentOutput(node));
   let state: SelectionState = "none";
   let message = "Select a source and a vector path.";
 
   if (selection.length === 1) {
     const selected = selection[0];
-    if (selected.type === "VECTOR" && targetPathScore(selected) >= 1.5) {
+    if (selected.type === "FRAME" && findEmbeddedOutputParts(selected)) {
+      state = "ready";
+      message = "Live frame selected — path editing is ready.";
+    } else if (selected.type === "VECTOR" && linked?.targetFromOutput && linked.targetId === selected.id) {
+      state = "ready";
+      message = "Editable path selected — live preview is active.";
+    } else if (selected.type === "VECTOR" && targetPathScore(selected) >= 1.5) {
       state = "path";
       message = "Path selected — now select a source.";
     } else {
