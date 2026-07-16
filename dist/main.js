@@ -20,12 +20,15 @@
   var linked = null;
   var renderTimer;
   var isRendering = false;
+  var pendingRender = false;
+  var pendingRenderForce = false;
   var lastRenderKey = "";
   var detachOutputOnNextRender = false;
   var arrangeSnapshotsOnNextRender = false;
   var autoArrangeSnapshotIds = [];
   figma.showUI(__html__, { width: 320, height: 650, themeColors: true });
   figma.on("selectionchange", () => {
+    if (isRendering) return;
     const restored = restoreLinkedOutputFromSelection();
     postSelectionStatus();
     scheduleRender(restored ? "output selection" : "selection", restored ? 20 : 140, restored);
@@ -51,14 +54,15 @@
       figma.on("documentchange", () => {
         scheduleRender("document");
       });
-      postSelectionStatus();
+      if (!isRendering) postSelectionStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not enable document live updates.";
       postStatus(`Live document updates disabled: ${message}`, true);
     }
   }
   function startFromSelection() {
-    if (restoreLinkedOutputFromSelection()) {
+    if (getSelectedOutputFrame()) {
+      restoreLinkedOutputFromSelection();
       postStatus("Live frame restored. Editable path is selected.");
       lastRenderKey = "";
       scheduleRender("restore", 20, true);
@@ -97,18 +101,41 @@
     return null;
   }
   function scheduleRender(reason, delay = 140, force = false) {
-    if (!settings.livePreview && !force || !linked || isRendering) return;
+    if (!settings.livePreview && !force || !linked) return;
+    if (isRendering) {
+      pendingRender = true;
+      pendingRenderForce = pendingRenderForce || force;
+      return;
+    }
     if (renderTimer !== void 0) clearTimeout(renderTimer);
     renderTimer = setTimeout(() => {
+      renderTimer = void 0;
       void renderLivePreview(reason, force);
     }, delay);
   }
   async function renderLivePreview(_reason, force = false) {
     if (!linked || isRendering || !settings.livePreview && !force) return;
+    const activeLink = linked;
     isRendering = true;
     try {
-      const source = await figma.getNodeByIdAsync(linked.sourceId);
-      const target = await figma.getNodeByIdAsync(linked.targetId);
+      let source = await figma.getNodeByIdAsync(activeLink.sourceId);
+      let target = await figma.getNodeByIdAsync(activeLink.targetId);
+      if (!source || !isSceneNode(source) || !target || target.type !== "VECTOR") {
+        const outputNode = activeLink.outputId ? await figma.getNodeByIdAsync(activeLink.outputId) : null;
+        const embedded = outputNode?.type === "FRAME" ? findEmbeddedOutputParts(outputNode) : null;
+        if (embedded) {
+          if (!source || !isSceneNode(source)) {
+            source = embedded.sourceSnapshot;
+            activeLink.sourceId = source.id;
+            activeLink.sourceFromOutput = true;
+          }
+          if (!target || target.type !== "VECTOR") {
+            target = embedded.targetGuide;
+            activeLink.targetId = target.id;
+            activeLink.targetFromOutput = true;
+          }
+        }
+      }
       if (!source || !target || target.type !== "VECTOR" || !isSceneNode(source)) {
         postStatus("Source \u0438\u043B\u0438 path \u0431\u043E\u043B\u044C\u0448\u0435 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B. \u0412\u044B\u0434\u0435\u043B\u0438 \u043F\u0430\u0440\u0443 \u0437\u0430\u043D\u043E\u0432\u043E.", true);
         return;
@@ -120,17 +147,7 @@
         postStatus("Target path \u0441\u043B\u0438\u0448\u043A\u043E\u043C \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439.", true);
         return;
       }
-      const renderKey = [
-        source.id,
-        target.id,
-        arcSignature(arcTable),
-        settings.fitMethod,
-        settings.thicknessScale,
-        settings.tileScale,
-        settings.patternOffset,
-        settings.smoothness,
-        settings.pathSmoothing
-      ].join("|");
+      const renderKey = buildRenderKey(source.id, target.id, arcTable);
       if (!force && renderKey === lastRenderKey) return;
       lastRenderKey = renderKey;
       const flattened = flattenSourceToVector(source);
@@ -153,25 +170,57 @@
         )
       }];
       const clipNetwork = buildPathEnvelopeNetwork(arcTable, sourceBounds.height * settings.thicknessScale);
+      if (linked !== activeLink) {
+        flattened.remove();
+        return;
+      }
       const output = await createOutputFrame(flattened, source, target, warpedPieces, clipNetwork, 0);
-      linked.outputId = output.frame.id;
-      linked.outputMeta = captureOutputMeta(output.frame);
-      linked.targetId = output.targetGuide.id;
-      linked.targetFromOutput = true;
-      if (linked.sourceFromOutput) linked.sourceId = output.sourceSnapshot.id;
+      if (linked !== activeLink) {
+        output.frame.remove();
+        return;
+      }
+      activeLink.outputId = output.frame.id;
+      activeLink.outputMeta = captureOutputMeta(output.frame);
+      activeLink.targetId = output.targetGuide.id;
+      activeLink.targetFromOutput = true;
+      if (activeLink.sourceFromOutput) activeLink.sourceId = output.sourceSnapshot.id;
+      lastRenderKey = buildRenderKey(activeLink.sourceId, activeLink.targetId, arcTable);
       if (arrangeSnapshotsOnNextRender) await arrangeSnapshotsRightOf(output.frame);
       selectEditablePath(output.targetGuide);
       const segmentCount = warpedPieces.reduce((sum, piece) => sum + piece.network.segments.length, 0);
       postStatus(`Preview updated: ${source.name}. Tile-stacked vector. Tiles: ${warpedPieces.length}. Segments: ${segmentCount}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown live preview error.";
+      if (message.toLowerCase().includes("does not exist") || message.toLowerCase().includes("removed")) {
+        postStatus("Live preview paused: a linked node is no longer available.", true);
+        return;
+      }
       postStatus(message, true);
       figma.notify(message, { error: true });
     } finally {
       detachOutputOnNextRender = false;
       arrangeSnapshotsOnNextRender = false;
       isRendering = false;
+      if (pendingRender) {
+        const rerenderForce = pendingRenderForce;
+        pendingRender = false;
+        pendingRenderForce = false;
+        scheduleRender("pending update", 20, rerenderForce);
+      }
     }
+  }
+  function buildRenderKey(sourceId, targetId, arcTable) {
+    return [
+      sourceId,
+      targetId,
+      arcSignature(arcTable),
+      settings.fitMethod,
+      settings.thicknessScale,
+      settings.tileScale,
+      settings.patternOffset,
+      settings.smoothness,
+      settings.pathSmoothing
+    ].join("|");
   }
   function flattenSourceToVector(source) {
     const sourceTransform = source.absoluteTransform;
@@ -213,7 +262,7 @@
     frame.resizeWithoutConstraints(frameWidth, frameHeight);
     frame.relativeTransform = absolutePageTransformForParent(parent, frameOrigin);
     parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
-    const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, OUTPUT_SOURCE_NAME, false);
+    const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, OUTPUT_SOURCE_NAME, false, { x: 4, y: 4 });
     const targetGuide = cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
     if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
     frame.insertChild(0, targetGuide);
@@ -490,19 +539,23 @@
     if (parent.type === "PAGE") return absoluteTransform;
     return multiplyTransform(invertTransform(parent.absoluteTransform), absoluteTransform);
   }
-  function cloneSceneNodeIntoParent(source, parent, name, visible) {
+  function cloneSceneNodeIntoParent(source, parent, name, visible, localOrigin) {
     const sourceTransform = source.absoluteTransform;
     const clone = source.clone();
     parent.appendChild(clone);
     clone.locked = false;
-    clone.relativeTransform = relativeTransformForParent(parent, sourceTransform);
+    const relativeTransform = relativeTransformForParent(parent, sourceTransform);
+    if (localOrigin) {
+      relativeTransform[0][2] = localOrigin.x;
+      relativeTransform[1][2] = localOrigin.y;
+    }
+    clone.relativeTransform = relativeTransform;
     clone.name = name;
     clone.visible = visible;
     return clone;
   }
   function selectEditablePath(path) {
     figma.currentPage.selection = [path];
-    figma.viewport.scrollAndZoomIntoView([path]);
   }
   function translateNetwork(network, dx, dy) {
     return {
@@ -1125,18 +1178,32 @@
   }
   function findEmbeddedOutputParts(frame) {
     if (!frame.name.startsWith(OUTPUT_NAME_PREFIX)) return null;
-    const sourceSnapshot = frame.children.find((child) => child.name === OUTPUT_SOURCE_NAME && isSceneNode(child));
-    const targetGuide = frame.children.find((child) => child.type === "VECTOR" && child.name === OUTPUT_TARGET_NAME);
+    const namedTarget = frame.children.find((child) => child.type === "VECTOR" && child.name === OUTPUT_TARGET_NAME);
+    const firstChild = frame.children[0];
+    const targetGuide = namedTarget ?? (firstChild?.type === "VECTOR" ? firstChild : null);
+    const namedSource = frame.children.find((child) => child.name === OUTPUT_SOURCE_NAME && isSceneNode(child));
+    const sourceSnapshot = namedSource ?? frame.children.find((child) => isSceneNode(child) && child !== targetGuide && child.visible === false) ?? null;
     if (!sourceSnapshot || !targetGuide) return null;
     return { sourceSnapshot, targetGuide };
   }
-  function restoreLinkedOutputFromSelection() {
+  function findOutputFrameForNode(node) {
+    let current = node;
+    while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+      if (current.type === "FRAME" && findEmbeddedOutputParts(current)) return current;
+      current = current.parent;
+    }
+    return null;
+  }
+  function getSelectedOutputFrame() {
     const selection = figma.currentPage.selection;
-    if (selection.length !== 1 || selection[0].type !== "FRAME") return false;
-    const frame = selection[0];
+    return selection.length === 1 ? findOutputFrameForNode(selection[0]) : null;
+  }
+  function restoreLinkedOutputFromSelection() {
+    const frame = getSelectedOutputFrame();
+    if (!frame) return false;
     const embedded = findEmbeddedOutputParts(frame);
     if (!embedded) return false;
-    const alreadyLinked = linked?.outputId === frame.id && linked.sourceId === embedded.sourceSnapshot.id && linked.targetId === embedded.targetGuide.id;
+    const alreadyLinked = linked?.outputId === frame.id && linked.targetId === embedded.targetGuide.id;
     if (alreadyLinked) return false;
     linked = {
       sourceId: embedded.sourceSnapshot.id,
@@ -1153,7 +1220,7 @@
   }
   function postSelectionStatus() {
     const rawSelection = figma.currentPage.selection;
-    if (rawSelection.length === 1 && rawSelection[0].type === "FRAME" && findEmbeddedOutputParts(rawSelection[0])) {
+    if (rawSelection.length === 1 && findOutputFrameForNode(rawSelection[0])) {
       figma.ui.postMessage({ type: "selection", state: "ready", message: "Live frame selected \u2014 path editing is ready." });
       return;
     }
@@ -1162,7 +1229,7 @@
     let message = "Select a source and a vector path.";
     if (selection.length === 1) {
       const selected = selection[0];
-      if (selected.type === "FRAME" && findEmbeddedOutputParts(selected)) {
+      if (findOutputFrameForNode(selected)) {
         state = "ready";
         message = "Live frame selected \u2014 path editing is ready.";
       } else if (selected.type === "VECTOR" && linked?.targetFromOutput && linked.targetId === selected.id) {
