@@ -10,6 +10,7 @@
     livePreview: true,
     thicknessScale: 1,
     tileScale: 1,
+    patternOffset: 0,
     smoothness: 4,
     pathSmoothing: 2,
     fitMethod: "repeat"
@@ -21,7 +22,7 @@
   var detachOutputOnNextRender = false;
   var arrangeSnapshotsOnNextRender = false;
   var autoArrangeSnapshotIds = [];
-  figma.showUI(__html__, { width: 320, height: 577, themeColors: true });
+  figma.showUI(__html__, { width: 320, height: 650, themeColors: true });
   figma.on("selectionchange", () => {
     postSelectionStatus();
     scheduleRender("selection");
@@ -113,6 +114,7 @@
         settings.fitMethod,
         settings.thicknessScale,
         settings.tileScale,
+        settings.patternOffset,
         settings.smoothness,
         settings.pathSmoothing
       ].join("|");
@@ -125,7 +127,18 @@
         throw new Error("Flattened source must have measurable width.");
       }
       const preparedNetwork = subdivideNetworkForWarp(flattened.vectorNetwork, settings.smoothness);
-      const warpedPieces = settings.fitMethod === "repeat" ? buildRepeatedPieces(preparedNetwork, sourceBounds, arcTable, settings.thicknessScale, settings.tileScale) : [{ name: "warped vector", network: warpSingle(preparedNetwork, sourceBounds, arcTable, settings.thicknessScale, 0, arcTable.totalLength, false) }];
+      const warpedPieces = settings.fitMethod === "repeat" ? buildRepeatedPieces(preparedNetwork, sourceBounds, arcTable, settings.thicknessScale, settings.tileScale, settings.patternOffset) : [{
+        name: "warped vector",
+        network: warpSingle(
+          preparedNetwork,
+          sourceBounds,
+          arcTable,
+          settings.thicknessScale,
+          settings.patternOffset * arcTable.totalLength,
+          arcTable.totalLength,
+          true
+        )
+      }];
       const clipNetwork = buildPathEnvelopeNetwork(arcTable, sourceBounds.height * settings.thicknessScale);
       const output = await createOutputFrame(flattened, target, warpedPieces, clipNetwork, 0);
       linked.outputId = output.id;
@@ -572,15 +585,18 @@
     });
     return { vertices, segments, regions: network.regions ? network.regions.map(copyRegion) : [] };
   }
-  function buildRepeatedPieces(network, bounds, arcTable, thicknessScale, tileScale) {
+  function buildRepeatedPieces(network, bounds, arcTable, thicknessScale, tileScale, patternOffset) {
     const normalizedTileScale = Math.max(0.05, tileScale);
     const tileArcLength = bounds.width * normalizedTileScale;
-    const tileCount = Math.max(1, Math.ceil(arcTable.totalLength / tileArcLength));
+    const offset = patternOffset * tileArcLength;
+    const firstTile = Math.floor(-offset / tileArcLength);
+    const lastTile = Math.ceil((arcTable.totalLength - offset) / tileArcLength) - 1;
     const pieces = [];
-    for (let tile = 0; tile < tileCount; tile += 1) {
+    for (let tile = firstTile; tile <= lastTile; tile += 1) {
+      const arcStart = tile * tileArcLength + offset;
       pieces.push({
-        name: `warped tile ${tile + 1}`,
-        network: warpSingle(network, bounds, arcTable, thicknessScale, tile * tileArcLength, tileArcLength, true)
+        name: `warped tile ${tile - firstTile + 1}`,
+        network: warpSingle(network, bounds, arcTable, thicknessScale, arcStart, tileArcLength, true)
       });
     }
     return pieces;
@@ -606,17 +622,77 @@
       const startTangent = reversed ? segment.tangentEnd : segment.tangentStart;
       const endTangent = reversed ? segment.tangentStart : segment.tangentEnd;
       return {
-        p0: pageVertices[startIndex],
-        p1: transformPoint(node.absoluteTransform, { x: start.x + (startTangent?.x ?? 0), y: start.y + (startTangent?.y ?? 0) }),
-        p2: transformPoint(node.absoluteTransform, { x: end.x + (endTangent?.x ?? 0), y: end.y + (endTangent?.y ?? 0) }),
-        p3: pageVertices[endIndex]
+        curve: {
+          p0: pageVertices[startIndex],
+          p1: transformPoint(node.absoluteTransform, { x: start.x + (startTangent?.x ?? 0), y: start.y + (startTangent?.y ?? 0) }),
+          p2: transformPoint(node.absoluteTransform, { x: end.x + (endTangent?.x ?? 0), y: end.y + (endTangent?.y ?? 0) }),
+          p3: pageVertices[endIndex]
+        },
+        startVertex: startIndex,
+        endVertex: endIndex
       };
     };
     const chains = orderedOpenChains(network);
-    const ordered = chains.map((chain) => chain.map((item) => segmentToCubic(item.segmentIndex, item.reversed)).filter((curve) => curve !== null)).filter((chain) => chain.length > 0);
-    const longest = ordered.sort((a, b) => chainLength(b) - chainLength(a))[0];
+    const ordered = chains.map((chain) => chain.map((item) => segmentToCubic(item.segmentIndex, item.reversed)).filter((part) => part !== null)).filter((chain) => chain.length > 0);
+    const longest = ordered.sort((a, b) => chainLength(b.map((part) => part.curve)) - chainLength(a.map((part) => part.curve)))[0];
     if (!longest && throwOnEmpty) throw new Error("Target vector does not contain a usable continuous path.");
-    return longest ?? [];
+    return longest ? roundTargetCorners(longest, network, node.absoluteTransform) : [];
+  }
+  function roundTargetCorners(parts, network, transform) {
+    if (parts.length === 0) return [];
+    const startTrim = parts.map(() => 0);
+    const endTrim = parts.map(() => 1);
+    const corners = /* @__PURE__ */ new Map();
+    const closed = parts.length > 1 && parts[0].startVertex === parts[parts.length - 1].endVertex;
+    const radiusScale = transformScale(transform);
+    for (let index = 0; index < parts.length; index += 1) {
+      const nextIndex = index + 1 < parts.length ? index + 1 : closed ? 0 : -1;
+      if (nextIndex < 0 || nextIndex === index) continue;
+      const incoming = parts[index];
+      const outgoing = parts[nextIndex];
+      if (incoming.endVertex !== outgoing.startVertex) continue;
+      const vertex = network.vertices[incoming.endVertex];
+      const localRadius = vertex?.cornerRadius ?? 0;
+      if (localRadius <= EPSILON) continue;
+      const incomingLength = approximateCubicLength(incoming.curve, 24);
+      const outgoingLength = approximateCubicLength(outgoing.curve, 24);
+      if (incomingLength <= EPSILON || outgoingLength <= EPSILON) continue;
+      const arrive = normalize(subtract(incoming.curve.p3, incoming.curve.p2), fallbackTangent(incoming.curve));
+      const leave = normalize(subtract(outgoing.curve.p1, outgoing.curve.p0), fallbackTangent(outgoing.curve));
+      const fromVertexToPrevious = { x: -arrive.x, y: -arrive.y };
+      const interiorAngle = Math.acos(clamp(dot(fromVertexToPrevious, leave), -1, 1));
+      if (interiorAngle <= 0.04 || Math.abs(Math.PI - interiorAngle) <= 0.04) continue;
+      const tangentDistance = radiusScale * localRadius / Math.max(EPSILON, Math.tan(interiorAngle / 2));
+      const maxTrim = Math.min(incomingLength, outgoingLength) * 0.45;
+      const trimDistance = Math.min(tangentDistance, maxTrim);
+      if (trimDistance <= EPSILON) continue;
+      const incomingT = cubicParameterAtLength(incoming.curve, incomingLength - trimDistance);
+      const outgoingT = cubicParameterAtLength(outgoing.curve, trimDistance);
+      if (incomingT <= EPSILON || outgoingT >= 1 - EPSILON) continue;
+      const arrivalAtTrim = normalize(cubicDerivative(incoming.curve, incomingT), arrive);
+      const leaveAtTrim = normalize(cubicDerivative(outgoing.curve, outgoingT), leave);
+      const start = cubicPoint(incoming.curve, incomingT);
+      const end = cubicPoint(outgoing.curve, outgoingT);
+      const effectiveRadius = trimDistance * Math.tan(interiorAngle / 2);
+      const turnAngle = Math.PI - interiorAngle;
+      const handleLength = 4 / 3 * Math.tan(turnAngle / 4) * effectiveRadius;
+      endTrim[index] = incomingT;
+      startTrim[nextIndex] = outgoingT;
+      corners.set(index, {
+        p0: start,
+        p1: { x: start.x + arrivalAtTrim.x * handleLength, y: start.y + arrivalAtTrim.y * handleLength },
+        p2: { x: end.x - leaveAtTrim.x * handleLength, y: end.y - leaveAtTrim.y * handleLength },
+        p3: end
+      });
+    }
+    const curves = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      const trimmed = trimCubic(parts[index].curve, startTrim[index], endTrim[index]);
+      if (trimmed && approximateCubicLength(trimmed, 8) > EPSILON) curves.push(trimmed);
+      const corner = corners.get(index);
+      if (corner && approximateCubicLength(corner, 8) > EPSILON) curves.push(corner);
+    }
+    return curves;
   }
   function orderedOpenChains(network) {
     const adjacency = /* @__PURE__ */ new Map();
@@ -856,16 +932,42 @@
     return pieces;
   }
   function splitCubic(cubic, t) {
-    const p01 = mixPoint(cubic.p0, cubic.p1, t);
-    const p12 = mixPoint(cubic.p1, cubic.p2, t);
-    const p23 = mixPoint(cubic.p2, cubic.p3, t);
-    const p012 = mixPoint(p01, p12, t);
-    const p123 = mixPoint(p12, p23, t);
-    const p0123 = mixPoint(p012, p123, t);
+    const clamped = clamp(t, 0, 1);
+    const p01 = mixPoint(cubic.p0, cubic.p1, clamped);
+    const p12 = mixPoint(cubic.p1, cubic.p2, clamped);
+    const p23 = mixPoint(cubic.p2, cubic.p3, clamped);
+    const p012 = mixPoint(p01, p12, clamped);
+    const p123 = mixPoint(p12, p23, clamped);
+    const p0123 = mixPoint(p012, p123, clamped);
     return {
       left: { p0: cubic.p0, p1: p01, p2: p012, p3: p0123 },
       right: { p0: p0123, p1: p123, p2: p23, p3: cubic.p3 }
     };
+  }
+  function trimCubic(cubic, startT, endT) {
+    const start = clamp(startT, 0, 1);
+    const end = clamp(endT, 0, 1);
+    if (end - start <= EPSILON) return null;
+    if (start <= EPSILON && end >= 1 - EPSILON) return cubic;
+    let remainder = cubic;
+    if (start > EPSILON) remainder = splitCubic(remainder, start).right;
+    if (end >= 1 - EPSILON) return remainder;
+    const span = Math.max(EPSILON, 1 - start);
+    return splitCubic(remainder, (end - start) / span).left;
+  }
+  function cubicParameterAtLength(curve, requestedLength) {
+    const totalLength = approximateCubicLength(curve, 32);
+    if (totalLength <= EPSILON) return 0;
+    const targetLength = clamp(requestedLength, 0, totalLength);
+    let low = 0;
+    let high = 1;
+    for (let iteration = 0; iteration < 30; iteration += 1) {
+      const middle = (low + high) / 2;
+      const beforeMiddle = approximateCubicLength(splitCubic(curve, middle).left, 12);
+      if (beforeMiddle < targetLength) low = middle;
+      else high = middle;
+    }
+    return (low + high) / 2;
   }
   function cubicPoint(curve, t) {
     const mt = 1 - t;
@@ -901,6 +1003,11 @@
       x: transform[0][0] * point.x + transform[0][1] * point.y + transform[0][2],
       y: transform[1][0] * point.x + transform[1][1] * point.y + transform[1][2]
     };
+  }
+  function transformScale(transform) {
+    const xAxisScale = Math.hypot(transform[0][0], transform[1][0]);
+    const yAxisScale = Math.hypot(transform[0][1], transform[1][1]);
+    return Math.max(EPSILON, (xAxisScale + yAxisScale) / 2);
   }
   function invertTransform(transform) {
     const [[a, c, e], [b, d, f]] = transform;
@@ -938,6 +1045,12 @@
     const length = Math.hypot(vector.x, vector.y);
     if (length <= EPSILON) return fallback;
     return { x: vector.x / length, y: vector.y / length };
+  }
+  function dot(a, b) {
+    return a.x * b.x + a.y * b.y;
+  }
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
   }
   function fallbackTangent(curve) {
     return normalize({ x: curve.p3.x - curve.p0.x, y: curve.p3.y - curve.p0.y }, { x: 1, y: 0 });

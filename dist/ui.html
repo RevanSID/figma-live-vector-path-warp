@@ -524,6 +524,14 @@
 
           <label class="slider">
             <span class="row">
+              <span>Pattern Offset</span>
+              <output id="patternOffsetValue">0%</output>
+            </span>
+            <input id="patternOffset" type="range" min="-100" max="100" step="1" value="0" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
               <span>Smoothness</span>
               <output id="smoothnessValue">4</output>
             </span>
@@ -562,6 +570,8 @@
   var scaleValue = document.getElementById("scaleValue");
   var tileScale = document.getElementById("tileScale");
   var tileScaleValue = document.getElementById("tileScaleValue");
+  var patternOffset = document.getElementById("patternOffset");
+  var patternOffsetValue = document.getElementById("patternOffsetValue");
   var smoothness = document.getElementById("smoothness");
   var smoothnessValue = document.getElementById("smoothnessValue");
   var pathSmoothing = document.getElementById("pathSmoothing");
@@ -569,13 +579,14 @@
   var fit = document.getElementById("fit");
   var start = document.getElementById("start");
   var status = document.getElementById("status");
-  var ranges = [scale, tileScale, smoothness, pathSmoothing];
+  var ranges = [scale, tileScale, patternOffset, smoothness, pathSmoothing];
   function sendSettings() {
     const payload = {
       type: "settings",
       livePreview: livePreview.checked,
       thicknessScale: Number(scale.value) / 100,
       tileScale: Number(tileScale.value) / 100,
+      patternOffset: Number(patternOffset.value) / 100,
       smoothness: Number(smoothness.value),
       pathSmoothing: Number(pathSmoothing.value),
       fitMethod: fit.value
@@ -589,6 +600,8 @@
   function updateLabels() {
     scaleValue.value = `${scale.value}%`;
     tileScaleValue.value = `${tileScale.value}%`;
+    const offset = Number(patternOffset.value);
+    patternOffsetValue.value = `${offset > 0 ? "+" : ""}${offset}%`;
     smoothnessValue.value = smoothness.value;
     pathSmoothingValue.value = pathSmoothing.value;
     for (const range of ranges) updateRangeProgress(range);
@@ -643,7 +656,7 @@
     updateLabels();
     sendSettings();
   });
-  for (const control of [livePreview, lockScale, smoothness, pathSmoothing, fit]) {
+  for (const control of [livePreview, lockScale, patternOffset, smoothness, pathSmoothing, fit]) {
     control.addEventListener("input", () => {
       updateLabels();
       sendSettings();

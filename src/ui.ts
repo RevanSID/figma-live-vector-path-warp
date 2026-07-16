@@ -8,6 +8,7 @@ interface UiSettings {
   livePreview: boolean;
   thicknessScale: number;
   tileScale: number;
+  patternOffset: number;
   smoothness: number;
   pathSmoothing: number;
   fitMethod: FitMethod;
@@ -29,6 +30,8 @@ const scale = document.getElementById("scale") as HTMLInputElement;
 const scaleValue = document.getElementById("scaleValue") as HTMLOutputElement;
 const tileScale = document.getElementById("tileScale") as HTMLInputElement;
 const tileScaleValue = document.getElementById("tileScaleValue") as HTMLOutputElement;
+const patternOffset = document.getElementById("patternOffset") as HTMLInputElement;
+const patternOffsetValue = document.getElementById("patternOffsetValue") as HTMLOutputElement;
 const smoothness = document.getElementById("smoothness") as HTMLInputElement;
 const smoothnessValue = document.getElementById("smoothnessValue") as HTMLOutputElement;
 const pathSmoothing = document.getElementById("pathSmoothing") as HTMLInputElement;
@@ -36,7 +39,7 @@ const pathSmoothingValue = document.getElementById("pathSmoothingValue") as HTML
 const fit = document.getElementById("fit") as HTMLSelectElement;
 const start = document.getElementById("start") as HTMLButtonElement;
 const status = document.getElementById("status") as HTMLParagraphElement;
-const ranges = [scale, tileScale, smoothness, pathSmoothing];
+const ranges = [scale, tileScale, patternOffset, smoothness, pathSmoothing];
 
 function sendSettings() {
   const payload: UiSettings = {
@@ -44,6 +47,7 @@ function sendSettings() {
     livePreview: livePreview.checked,
     thicknessScale: Number(scale.value) / 100,
     tileScale: Number(tileScale.value) / 100,
+    patternOffset: Number(patternOffset.value) / 100,
     smoothness: Number(smoothness.value),
     pathSmoothing: Number(pathSmoothing.value),
     fitMethod: fit.value as FitMethod
@@ -59,6 +63,8 @@ function sendStart() {
 function updateLabels() {
   scaleValue.value = `${scale.value}%`;
   tileScaleValue.value = `${tileScale.value}%`;
+  const offset = Number(patternOffset.value);
+  patternOffsetValue.value = `${offset > 0 ? "+" : ""}${offset}%`;
   smoothnessValue.value = smoothness.value;
   pathSmoothingValue.value = pathSmoothing.value;
   for (const range of ranges) updateRangeProgress(range);
@@ -123,7 +129,7 @@ tileScale.addEventListener("change", () => {
   sendSettings();
 });
 
-for (const control of [livePreview, lockScale, smoothness, pathSmoothing, fit]) {
+for (const control of [livePreview, lockScale, patternOffset, smoothness, pathSmoothing, fit]) {
   control.addEventListener("input", () => {
     updateLabels();
     sendSettings();

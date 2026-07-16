@@ -17,6 +17,8 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 - Stroke-to-vector conversion with Figma's native `outlineStroke()` API before deformation.
 - Geometry subdivision and separate path-smoothing controls.
 - Scale/thickness and tile-scale ratio lock.
+- Pattern offset control for shifting the repeat phase along the target path.
+- Target vertex corner radii are approximated as rounded cubic joins before arc-length mapping.
 - Snapshot behavior for previous results when a result is moved, renamed, copied, or replaced through Start.
 - No network requests or API keys. The plugin manifest uses `networkAccess: { "allowedDomains": ["none"] }`.
 
