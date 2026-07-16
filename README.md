@@ -6,7 +6,7 @@ An open-source Figma plugin that deforms vector artwork along a Bezier path inst
 
 The plugin is designed for pattern-brush-like workflows: a source layer is flattened to editable vector geometry, mapped to a target path by arc length, and previewed directly on the Figma canvas.
 
-> Independent project. Not affiliated with Figma or Anthropic.
+> Independent project. Not affiliated with Figma.
 
 ## Features
 
