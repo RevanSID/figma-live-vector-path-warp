@@ -16,7 +16,7 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 - Source support for vectors, frames, groups, components, and instances that can be flattened by Figma.
 - Stroke-to-vector conversion with Figma's native `outlineStroke()` API before deformation.
 - High-quality source geometry subdivision with a separate path-smoothing control.
-- Scale/thickness and tile-scale controls with an optional ratio lock.
+- Scale/thickness and pattern-offset controls.
 - Pattern offset control for shifting the repeat phase along the target path.
 - Target vertex corner radii are approximated as rounded cubic joins before arc-length mapping.
 - Output frames retain a hidden source snapshot and an editable target-path guide for relaunching live mode.
@@ -25,7 +25,7 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 
 ## Interface
 
-The plugin provides live canvas preview, Stretch to Fit deformation, thickness, tile-scale, pattern-offset, and path-smoothing controls.
+The plugin provides live canvas preview, Stretch to Fit deformation, thickness and pattern-offset controls, and path smoothing.
 
 ![Live Vector Path Warp interface](docs/plugin-ui.png)
 

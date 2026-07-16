@@ -6,7 +6,6 @@ interface UiSettings {
   type: "settings";
   livePreview: boolean;
   thicknessScale: number;
-  tileScale: number;
   patternOffset: number;
   pathSmoothing: number;
 }
@@ -14,7 +13,6 @@ interface UiSettings {
 interface SettingsPayload {
   livePreview: boolean;
   thicknessScale: number;
-  tileScale: number;
   patternOffset: number;
   pathSmoothing: number;
 }
@@ -31,25 +29,21 @@ interface PluginResponse {
 }
 
 const livePreview = document.getElementById("livePreview") as HTMLInputElement;
-const lockScale = document.getElementById("lockScale") as HTMLInputElement;
 const scale = document.getElementById("scale") as HTMLInputElement;
 const scaleValue = document.getElementById("scaleValue") as HTMLOutputElement;
-const tileScale = document.getElementById("tileScale") as HTMLInputElement;
-const tileScaleValue = document.getElementById("tileScaleValue") as HTMLOutputElement;
 const patternOffset = document.getElementById("patternOffset") as HTMLInputElement;
 const patternOffsetValue = document.getElementById("patternOffsetValue") as HTMLOutputElement;
 const pathSmoothing = document.getElementById("pathSmoothing") as HTMLInputElement;
 const pathSmoothingValue = document.getElementById("pathSmoothingValue") as HTMLOutputElement;
 const start = document.getElementById("start") as HTMLButtonElement;
 const status = document.getElementById("status") as HTMLParagraphElement;
-const ranges = [scale, tileScale, patternOffset, pathSmoothing];
+const ranges = [scale, patternOffset, pathSmoothing];
 
 function sendSettings() {
   const payload: UiSettings = {
     type: "settings",
     livePreview: livePreview.checked,
     thicknessScale: Number(scale.value) / 100,
-    tileScale: Number(tileScale.value) / 100,
     patternOffset: Number(patternOffset.value) / 100,
     pathSmoothing: Number(pathSmoothing.value)
   };
@@ -63,7 +57,6 @@ function sendStart() {
 
 function updateLabels() {
   scaleValue.value = `${scale.value}%`;
-  tileScaleValue.value = `${tileScale.value}%`;
   const offset = Number(patternOffset.value);
   patternOffsetValue.value = `${offset > 0 ? "+" : ""}${offset}%`;
   pathSmoothingValue.value = pathSmoothing.value;
@@ -73,16 +66,9 @@ function updateLabels() {
 function applySettings(next: SettingsPayload) {
   livePreview.checked = next.livePreview;
   scale.value = String(Math.round(next.thicknessScale * 100));
-  tileScale.value = String(Math.round(next.tileScale * 100));
   patternOffset.value = String(Math.round(next.patternOffset * 100));
   pathSmoothing.value = String(Math.round(next.pathSmoothing));
   updateLabels();
-}
-
-function syncScaleControls(changed: HTMLInputElement) {
-  if (!lockScale.checked) return;
-  if (changed === scale) tileScale.value = scale.value;
-  if (changed === tileScale) scale.value = tileScale.value;
 }
 
 function setStatus(message: string, isError = false) {
@@ -114,25 +100,12 @@ start.addEventListener("click", () => {
   sendStart();
 });
 
-for (const control of [livePreview, lockScale, patternOffset, pathSmoothing]) {
+for (const control of [livePreview, scale, patternOffset, pathSmoothing]) {
   control.addEventListener("input", () => {
     updateLabels();
     sendSettings();
   });
   control.addEventListener("change", () => {
-    updateLabels();
-    sendSettings();
-  });
-}
-
-for (const control of [scale, tileScale]) {
-  control.addEventListener("input", () => {
-    syncScaleControls(control);
-    updateLabels();
-    sendSettings();
-  });
-  control.addEventListener("change", () => {
-    syncScaleControls(control);
     updateLabels();
     sendSettings();
   });
@@ -153,16 +126,3 @@ window.onmessage = (event: MessageEvent) => {
 };
 
 updateLabels();
-
-const glassCard = document.querySelector(".glass-card") as HTMLElement | null;
-function sendResize() {
-  if (!glassCard) return;
-  const height = Math.ceil(glassCard.getBoundingClientRect().bottom + 16);
-  parent.postMessage({ pluginMessage: { type: "resize", height } }, "*");
-}
-
-if (glassCard && "ResizeObserver" in window) {
-  new ResizeObserver(sendResize).observe(glassCard);
-}
-window.addEventListener("load", sendResize);
-sendResize();

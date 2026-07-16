@@ -12,7 +12,6 @@
     type: "settings",
     livePreview: true,
     thicknessScale: 1,
-    tileScale: 1,
     patternOffset: 0,
     smoothness: DEFAULT_SOURCE_SMOOTHNESS,
     pathSmoothing: 2
@@ -26,7 +25,7 @@
   var detachOutputOnNextRender = false;
   var arrangeSnapshotsOnNextRender = false;
   var autoArrangeSnapshotIds = [];
-  figma.showUI(__html__, { width: 320, height: 500, themeColors: true });
+  figma.showUI(__html__, { width: 320, height: 650, themeColors: true });
   figma.on("selectionchange", () => {
     if (isRendering) return;
     const restored = restoreLinkedOutputFromSelection();
@@ -36,11 +35,6 @@
   figma.ui.onmessage = (message) => {
     if (message.type === "start") {
       startFromSelection();
-      return;
-    }
-    if (message.type === "resize") {
-      const height = Number.isFinite(message.height) ? Math.ceil(message.height) : 500;
-      figma.ui.resize(320, Math.max(240, height));
       return;
     }
     if (message.type === "settings") {
@@ -167,11 +161,10 @@
         throw new Error("Flattened source must have measurable width.");
       }
       const preparedNetwork = subdivideNetworkForWarp(flattened.vectorNetwork, settings.smoothness);
-      const scaledNetwork = scaleNetworkHorizontally(preparedNetwork, sourceBounds, settings.tileScale);
       const warpedPieces = [{
         name: "warped vector",
         network: warpSingle(
-          scaledNetwork,
+          preparedNetwork,
           sourceBounds,
           arcTable,
           settings.thicknessScale,
@@ -226,7 +219,6 @@
       targetId,
       arcSignature(arcTable),
       settings.thicknessScale,
-      settings.tileScale,
       settings.patternOffset,
       settings.smoothness,
       settings.pathSmoothing
@@ -642,20 +634,6 @@
       )
     }));
     return { vertices, segments, regions };
-  }
-  function scaleNetworkHorizontally(network, bounds, scale) {
-    const normalizedScale = clamp(scale, 0.1, 3);
-    if (Math.abs(normalizedScale - 1) <= EPSILON) return network;
-    const scaleX = (x) => bounds.minX + (x - bounds.minX) * normalizedScale;
-    return {
-      vertices: network.vertices.map((vertex) => ({ ...vertex, x: scaleX(vertex.x) })),
-      segments: network.segments.map((segment) => ({
-        ...segment,
-        tangentStart: segment.tangentStart ? { x: segment.tangentStart.x * normalizedScale, y: segment.tangentStart.y } : segment.tangentStart,
-        tangentEnd: segment.tangentEnd ? { x: segment.tangentEnd.x * normalizedScale, y: segment.tangentEnd.y } : segment.tangentEnd
-      })),
-      regions: network.regions ? network.regions.map(copyRegion) : []
-    };
   }
   function sourceSubdivisionCount(cubic, maxSourceXStep, maxPiecesPerSegment) {
     let minX = Number.POSITIVE_INFINITY;
@@ -1190,7 +1168,6 @@
       "v=1",
       `live=${currentSettings.livePreview ? 1 : 0}`,
       `thickness=${currentSettings.thicknessScale.toFixed(4)}`,
-      `tile=${currentSettings.tileScale.toFixed(4)}`,
       `offset=${currentSettings.patternOffset.toFixed(4)}`,
       `path=${Math.round(currentSettings.pathSmoothing)}`
     ].join("|");
@@ -1205,14 +1182,12 @@
       values[item.slice(0, separator)] = item.slice(separator + 1);
     }
     const thicknessScale = Number(values.thickness);
-    const tileScale = Number(values.tile);
     const patternOffset = Number(values.offset);
     const pathSmoothing = Number(values.path);
-    if (!Number.isFinite(thicknessScale) || !Number.isFinite(tileScale) || !Number.isFinite(patternOffset) || !Number.isFinite(pathSmoothing)) return null;
+    if (!Number.isFinite(thicknessScale) || !Number.isFinite(patternOffset) || !Number.isFinite(pathSmoothing)) return null;
     return {
       livePreview: values.live === "1",
       thicknessScale: clamp(thicknessScale, 0.1, 3),
-      tileScale: clamp(tileScale, 0.1, 3),
       patternOffset: clamp(patternOffset, -1, 1),
       pathSmoothing: clamp(Math.round(pathSmoothing), 0, 10)
     };
@@ -1223,7 +1198,6 @@
       settings: {
         livePreview: settings.livePreview,
         thicknessScale: settings.thicknessScale,
-        tileScale: settings.tileScale,
         patternOffset: settings.patternOffset,
         pathSmoothing: settings.pathSmoothing
       }

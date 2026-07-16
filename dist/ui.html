@@ -27,8 +27,7 @@
       html,
       body {
         width: 100%;
-        height: auto;
-        min-height: 0;
+        min-height: 100%;
       }
 
       body {
@@ -50,8 +49,7 @@
         position: relative;
         display: block;
         width: 100%;
-        height: auto;
-        min-height: 0;
+        min-height: 100vh;
         padding: 16px;
         overflow: hidden;
       }
@@ -166,7 +164,7 @@
 
       .options {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         gap: 6px;
       }
 
@@ -502,11 +500,6 @@
             <span>Live Preview</span>
             <input id="livePreview" type="checkbox" checked />
           </label>
-
-          <label class="toggle">
-            <span>Lock scale</span>
-            <input id="lockScale" type="checkbox" checked />
-          </label>
         </section>
 
         <section class="controls" aria-label="Warp controls">
@@ -516,14 +509,6 @@
               <output id="scaleValue">100%</output>
             </span>
             <input id="scale" type="range" min="10" max="300" step="1" value="100" />
-          </label>
-
-          <label class="slider">
-            <span class="row">
-              <span>Tile Scale</span>
-              <output id="tileScaleValue">100%</output>
-            </span>
-            <input id="tileScale" type="range" min="10" max="300" step="1" value="100" />
           </label>
 
           <label class="slider">
@@ -551,24 +536,20 @@
 (() => {
   // src/ui.ts
   var livePreview = document.getElementById("livePreview");
-  var lockScale = document.getElementById("lockScale");
   var scale = document.getElementById("scale");
   var scaleValue = document.getElementById("scaleValue");
-  var tileScale = document.getElementById("tileScale");
-  var tileScaleValue = document.getElementById("tileScaleValue");
   var patternOffset = document.getElementById("patternOffset");
   var patternOffsetValue = document.getElementById("patternOffsetValue");
   var pathSmoothing = document.getElementById("pathSmoothing");
   var pathSmoothingValue = document.getElementById("pathSmoothingValue");
   var start = document.getElementById("start");
   var status = document.getElementById("status");
-  var ranges = [scale, tileScale, patternOffset, pathSmoothing];
+  var ranges = [scale, patternOffset, pathSmoothing];
   function sendSettings() {
     const payload = {
       type: "settings",
       livePreview: livePreview.checked,
       thicknessScale: Number(scale.value) / 100,
-      tileScale: Number(tileScale.value) / 100,
       patternOffset: Number(patternOffset.value) / 100,
       pathSmoothing: Number(pathSmoothing.value)
     };
@@ -580,7 +561,6 @@
   }
   function updateLabels() {
     scaleValue.value = `${scale.value}%`;
-    tileScaleValue.value = `${tileScale.value}%`;
     const offset = Number(patternOffset.value);
     patternOffsetValue.value = `${offset > 0 ? "+" : ""}${offset}%`;
     pathSmoothingValue.value = pathSmoothing.value;
@@ -589,15 +569,9 @@
   function applySettings(next) {
     livePreview.checked = next.livePreview;
     scale.value = String(Math.round(next.thicknessScale * 100));
-    tileScale.value = String(Math.round(next.tileScale * 100));
     patternOffset.value = String(Math.round(next.patternOffset * 100));
     pathSmoothing.value = String(Math.round(next.pathSmoothing));
     updateLabels();
-  }
-  function syncScaleControls(changed) {
-    if (!lockScale.checked) return;
-    if (changed === scale) tileScale.value = scale.value;
-    if (changed === tileScale) scale.value = tileScale.value;
   }
   function setStatus(message, isError = false) {
     status.textContent = message;
@@ -624,24 +598,12 @@
     sendSettings();
     sendStart();
   });
-  for (const control of [livePreview, lockScale, patternOffset, pathSmoothing]) {
+  for (const control of [livePreview, scale, patternOffset, pathSmoothing]) {
     control.addEventListener("input", () => {
       updateLabels();
       sendSettings();
     });
     control.addEventListener("change", () => {
-      updateLabels();
-      sendSettings();
-    });
-  }
-  for (const control of [scale, tileScale]) {
-    control.addEventListener("input", () => {
-      syncScaleControls(control);
-      updateLabels();
-      sendSettings();
-    });
-    control.addEventListener("change", () => {
-      syncScaleControls(control);
       updateLabels();
       sendSettings();
     });
@@ -660,17 +622,6 @@
     setStatus(message.message ?? "", message.type === "error");
   };
   updateLabels();
-  var glassCard = document.querySelector(".glass-card");
-  function sendResize() {
-    if (!glassCard) return;
-    const height = Math.ceil(glassCard.getBoundingClientRect().bottom + 16);
-    parent.postMessage({ pluginMessage: { type: "resize", height } }, "*");
-  }
-  if (glassCard && "ResizeObserver" in window) {
-    new ResizeObserver(sendResize).observe(glassCard);
-  }
-  window.addEventListener("load", sendResize);
-  sendResize();
 })();
 </script>
   </body>
