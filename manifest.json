@@ -1,5 +1,6 @@
 {
   "name": "Path Warping Live Vector Preview",
+  "id": "1659676849410011314",
   "api": "1.0.0",
   "main": "dist/main.js",
   "ui": "dist/ui.html",
