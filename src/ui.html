@@ -27,7 +27,8 @@
       html,
       body {
         width: 100%;
-        min-height: 100%;
+        height: auto;
+        min-height: 0;
       }
 
       body {
@@ -49,7 +50,8 @@
         position: relative;
         display: block;
         width: 100%;
-        min-height: 100vh;
+        height: auto;
+        min-height: 0;
         padding: 16px;
         overflow: hidden;
       }
@@ -164,7 +166,7 @@
 
       .options {
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 6px;
       }
 
@@ -500,6 +502,11 @@
             <span>Live Preview</span>
             <input id="livePreview" type="checkbox" checked />
           </label>
+
+          <label class="toggle">
+            <span>Lock scale</span>
+            <input id="lockScale" type="checkbox" checked />
+          </label>
         </section>
 
         <section class="controls" aria-label="Warp controls">
@@ -509,6 +516,14 @@
               <output id="scaleValue">100%</output>
             </span>
             <input id="scale" type="range" min="10" max="300" step="1" value="100" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
+              <span>Tile Scale</span>
+              <output id="tileScaleValue">100%</output>
+            </span>
+            <input id="tileScale" type="range" min="10" max="300" step="1" value="100" />
           </label>
 
           <label class="slider">
