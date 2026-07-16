@@ -11,12 +11,12 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 ## Features
 
 - Arc-length parameterization for cubic Bezier paths.
-- Repeat and Stretch to Fit modes.
+- Stretch to Fit mapping across the complete target path.
 - Live preview while editing the selected path.
 - Source support for vectors, frames, groups, components, and instances that can be flattened by Figma.
 - Stroke-to-vector conversion with Figma's native `outlineStroke()` API before deformation.
-- Geometry subdivision and separate path-smoothing controls.
-- Scale/thickness and tile-scale ratio lock.
+- High-quality source geometry subdivision with a separate path-smoothing control.
+- Scale/thickness and pattern-offset controls.
 - Pattern offset control for shifting the repeat phase along the target path.
 - Target vertex corner radii are approximated as rounded cubic joins before arc-length mapping.
 - Output frames retain a hidden source snapshot and an editable target-path guide for relaunching live mode.
@@ -25,7 +25,7 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 
 ## Interface
 
-The plugin provides live canvas preview, repeat and stretch fitting, thickness and tile-scale controls, path smoothing, and a lock for preserving the source pattern ratio.
+The plugin provides live canvas preview, Stretch to Fit deformation, thickness and pattern-offset controls, and path smoothing.
 
 ![Live Vector Path Warp interface](docs/plugin-ui.png)
 
@@ -53,7 +53,7 @@ During development, import the repository's `manifest.json` into Figma. After ch
 
 ## Architecture
 
-- `src/main.ts` contains selection tracking, live-preview lifecycle, Bezier sampling, arc-length lookup, source flattening, stroke outlining, network subdivision, deformation, repeat tiling, and output-frame management.
+- `src/main.ts` contains selection tracking, live-preview lifecycle, Bezier sampling, arc-length lookup, source flattening, stroke outlining, network subdivision, deformation, and output-frame management.
 - `src/ui.html` contains the standalone webview markup and styling.
 - `src/ui.ts` sends settings to the plugin backend and exposes selection/render status.
 - `scripts/build.mjs` bundles the backend and UI and embeds the local preview asset into `dist/ui.html`.
@@ -67,7 +67,7 @@ During development, import the repository's `manifest.json` into Figma. After ch
 
 ## Contributing
 
-Bug reports and focused pull requests are welcome. Please include the source type, target path type, fitting mode, relevant slider values, and a minimal reproduction when reporting geometry issues.
+Bug reports and focused pull requests are welcome. Please include the source type, target path type, relevant slider values, and a minimal reproduction when reporting geometry issues.
 
 Run `npm run typecheck` and `npm run build` before opening a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md).
 

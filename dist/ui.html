@@ -68,10 +68,12 @@
       .warp-preview {
         position: absolute;
         z-index: 0;
-        top: 333px;
+        right: 0;
+        bottom: 0;
         left: 0;
         width: 320px;
         height: 244px;
+        margin: 0 auto;
         opacity: 1;
         pointer-events: none;
         filter: none;
@@ -81,7 +83,7 @@
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
       }
 
       header,
@@ -162,7 +164,7 @@
 
       .options {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         gap: 6px;
       }
 
@@ -498,11 +500,6 @@
             <span>Live Preview</span>
             <input id="livePreview" type="checkbox" checked />
           </label>
-
-          <label class="toggle">
-            <span>Lock scale</span>
-            <input id="lockScale" type="checkbox" checked />
-          </label>
         </section>
 
         <section class="controls" aria-label="Warp controls">
@@ -516,26 +513,10 @@
 
           <label class="slider">
             <span class="row">
-              <span>Tile Scale</span>
-              <output id="tileScaleValue">100%</output>
-            </span>
-            <input id="tileScale" type="range" min="10" max="300" step="1" value="100" />
-          </label>
-
-          <label class="slider">
-            <span class="row">
               <span>Pattern Offset</span>
               <output id="patternOffsetValue">0%</output>
             </span>
             <input id="patternOffset" type="range" min="-100" max="100" step="1" value="0" />
-          </label>
-
-          <label class="slider">
-            <span class="row">
-              <span>Smoothness</span>
-              <output id="smoothnessValue">4</output>
-            </span>
-            <input id="smoothness" type="range" min="1" max="10" step="1" value="4" />
           </label>
 
           <label class="slider">
@@ -547,16 +528,6 @@
           </label>
         </section>
 
-        <label class="field">
-          <span class="field-title">Fitting Method</span>
-          <span class="select-wrap">
-            <select id="fit">
-              <option value="repeat" selected>Repeat</option>
-              <option value="stretch">Stretch to Fit</option>
-            </select>
-          </span>
-        </label>
-
         <button id="start" type="button"><span>Start</span></button>
       </div>
     </main>
@@ -565,31 +536,22 @@
 (() => {
   // src/ui.ts
   var livePreview = document.getElementById("livePreview");
-  var lockScale = document.getElementById("lockScale");
   var scale = document.getElementById("scale");
   var scaleValue = document.getElementById("scaleValue");
-  var tileScale = document.getElementById("tileScale");
-  var tileScaleValue = document.getElementById("tileScaleValue");
   var patternOffset = document.getElementById("patternOffset");
   var patternOffsetValue = document.getElementById("patternOffsetValue");
-  var smoothness = document.getElementById("smoothness");
-  var smoothnessValue = document.getElementById("smoothnessValue");
   var pathSmoothing = document.getElementById("pathSmoothing");
   var pathSmoothingValue = document.getElementById("pathSmoothingValue");
-  var fit = document.getElementById("fit");
   var start = document.getElementById("start");
   var status = document.getElementById("status");
-  var ranges = [scale, tileScale, patternOffset, smoothness, pathSmoothing];
+  var ranges = [scale, patternOffset, pathSmoothing];
   function sendSettings() {
     const payload = {
       type: "settings",
       livePreview: livePreview.checked,
       thicknessScale: Number(scale.value) / 100,
-      tileScale: Number(tileScale.value) / 100,
       patternOffset: Number(patternOffset.value) / 100,
-      smoothness: Number(smoothness.value),
-      pathSmoothing: Number(pathSmoothing.value),
-      fitMethod: fit.value
+      pathSmoothing: Number(pathSmoothing.value)
     };
     parent.postMessage({ pluginMessage: payload }, "*");
   }
@@ -599,12 +561,17 @@
   }
   function updateLabels() {
     scaleValue.value = `${scale.value}%`;
-    tileScaleValue.value = `${tileScale.value}%`;
     const offset = Number(patternOffset.value);
     patternOffsetValue.value = `${offset > 0 ? "+" : ""}${offset}%`;
-    smoothnessValue.value = smoothness.value;
     pathSmoothingValue.value = pathSmoothing.value;
     for (const range of ranges) updateRangeProgress(range);
+  }
+  function applySettings(next) {
+    livePreview.checked = next.livePreview;
+    scale.value = String(Math.round(next.thicknessScale * 100));
+    patternOffset.value = String(Math.round(next.patternOffset * 100));
+    pathSmoothing.value = String(Math.round(next.pathSmoothing));
+    updateLabels();
   }
   function setStatus(message, isError = false) {
     status.textContent = message;
@@ -626,37 +593,12 @@
     const progress = max > min ? (value - min) / (max - min) * 100 : 0;
     range.style.setProperty("--range-progress", `${progress}%`);
   }
-  function syncScaleControls(changed) {
-    if (!lockScale.checked) return;
-    if (changed === scale) tileScale.value = scale.value;
-    if (changed === tileScale) scale.value = tileScale.value;
-  }
   start.addEventListener("click", () => {
     updateLabels();
     sendSettings();
     sendStart();
   });
-  scale.addEventListener("input", () => {
-    syncScaleControls(scale);
-    updateLabels();
-    sendSettings();
-  });
-  tileScale.addEventListener("input", () => {
-    syncScaleControls(tileScale);
-    updateLabels();
-    sendSettings();
-  });
-  scale.addEventListener("change", () => {
-    syncScaleControls(scale);
-    updateLabels();
-    sendSettings();
-  });
-  tileScale.addEventListener("change", () => {
-    syncScaleControls(tileScale);
-    updateLabels();
-    sendSettings();
-  });
-  for (const control of [livePreview, lockScale, patternOffset, smoothness, pathSmoothing, fit]) {
+  for (const control of [livePreview, scale, patternOffset, pathSmoothing]) {
     control.addEventListener("input", () => {
       updateLabels();
       sendSettings();
@@ -669,14 +611,17 @@
   window.onmessage = (event) => {
     const message = event.data.pluginMessage;
     if (!message) return;
-    if (message.type === "selection" && message.state) {
+    if (message.type === "settings" && message.settings) {
+      applySettings(message.settings);
+      return;
+    }
+    if (message.type === "selection" && message.state && message.message) {
       setSelectionStatus(message.message, message.state);
       return;
     }
-    setStatus(message.message, message.type === "error");
+    setStatus(message.message ?? "", message.type === "error");
   };
   updateLabels();
-  sendSettings();
 })();
 </script>
   </body>

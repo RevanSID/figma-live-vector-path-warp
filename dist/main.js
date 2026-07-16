@@ -3,6 +3,7 @@
   // src/main.ts
   var EPSILON = 1e-6;
   var TARGET_SAMPLE_PX = 3;
+  var DEFAULT_SOURCE_SMOOTHNESS = 12;
   var OUTPUT_NAME_PREFIX = "Live Vector Path Warp";
   var OUTPUT_SOURCE_NAME = "__Live Vector Path Warp Source Snapshot";
   var OUTPUT_TARGET_NAME = "__Live Vector Path Warp Editable Path";
@@ -11,11 +12,9 @@
     type: "settings",
     livePreview: true,
     thicknessScale: 1,
-    tileScale: 1,
     patternOffset: 0,
-    smoothness: 4,
-    pathSmoothing: 2,
-    fitMethod: "repeat"
+    smoothness: DEFAULT_SOURCE_SMOOTHNESS,
+    pathSmoothing: 2
   };
   var linked = null;
   var renderTimer;
@@ -39,12 +38,17 @@
       return;
     }
     if (message.type === "settings") {
-      settings = { ...settings, ...message };
+      settings = {
+        ...settings,
+        ...message,
+        smoothness: DEFAULT_SOURCE_SMOOTHNESS
+      };
       scheduleRender("settings", 20, true);
     }
   };
   void initializeDocumentWatcher();
   var restoredOnLaunch = restoreLinkedOutputFromSelection();
+  postSettingsToUi();
   postSelectionStatus();
   if (restoredOnLaunch) scheduleRender("restore on launch", 20, true);
   async function initializeDocumentWatcher() {
@@ -157,7 +161,7 @@
         throw new Error("Flattened source must have measurable width.");
       }
       const preparedNetwork = subdivideNetworkForWarp(flattened.vectorNetwork, settings.smoothness);
-      const warpedPieces = settings.fitMethod === "repeat" ? buildRepeatedPieces(preparedNetwork, sourceBounds, arcTable, settings.thicknessScale, settings.tileScale, settings.patternOffset) : [{
+      const warpedPieces = [{
         name: "warped vector",
         network: warpSingle(
           preparedNetwork,
@@ -188,7 +192,7 @@
       if (arrangeSnapshotsOnNextRender) await arrangeSnapshotsRightOf(output.frame);
       selectEditablePath(output.targetGuide);
       const segmentCount = warpedPieces.reduce((sum, piece) => sum + piece.network.segments.length, 0);
-      postStatus(`Preview updated: ${source.name}. Tile-stacked vector. Tiles: ${warpedPieces.length}. Segments: ${segmentCount}.`);
+      postStatus(`Preview updated: ${source.name}. Stretch vector. Segments: ${segmentCount}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown live preview error.";
       if (message.toLowerCase().includes("does not exist") || message.toLowerCase().includes("removed")) {
@@ -214,9 +218,7 @@
       sourceId,
       targetId,
       arcSignature(arcTable),
-      settings.fitMethod,
       settings.thicknessScale,
-      settings.tileScale,
       settings.patternOffset,
       settings.smoothness,
       settings.pathSmoothing
@@ -255,14 +257,14 @@
     const parent = reuseOutputPlacement ? previousParent : target.parent && hasChildren(target.parent) ? target.parent : figma.currentPage;
     const targetIndex = reuseOutputPlacement ? previousIndex : parent.children.indexOf(target);
     const frame = figma.createFrame();
-    frame.name = `${OUTPUT_NAME_PREFIX} - multi-tile - ${flattened.name.replace(" - warp source flatten", "")}`;
+    frame.name = `${OUTPUT_NAME_PREFIX} - stretch - ${flattened.name.replace(" - warp source flatten", "")}`;
     frame.clipsContent = true;
     frame.fills = [];
     frame.strokes = [];
     frame.resizeWithoutConstraints(frameWidth, frameHeight);
     frame.relativeTransform = absolutePageTransformForParent(parent, frameOrigin);
     parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
-    const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, OUTPUT_SOURCE_NAME, false, { x: 4, y: 4 });
+    const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
     const targetGuide = cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
     if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
     frame.insertChild(0, targetGuide);
@@ -590,7 +592,7 @@
     return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
   }
   function subdivideNetworkForWarp(network, smoothness) {
-    const quality = Math.max(1, Math.min(10, Math.round(smoothness)));
+    const quality = Math.max(1, Math.min(12, Math.round(smoothness)));
     const maxSourceXStep = 32 / quality;
     const maxPiecesPerSegment = quality * 12;
     const vertices = network.vertices.map((vertex) => ({ ...vertex }));
@@ -684,22 +686,6 @@
       };
     });
     return { vertices, segments, regions: network.regions ? network.regions.map(copyRegion) : [] };
-  }
-  function buildRepeatedPieces(network, bounds, arcTable, thicknessScale, tileScale, patternOffset) {
-    const normalizedTileScale = Math.max(0.05, tileScale);
-    const tileArcLength = bounds.width * normalizedTileScale;
-    const offset = patternOffset * tileArcLength;
-    const firstTile = Math.floor(-offset / tileArcLength);
-    const lastTile = Math.ceil((arcTable.totalLength - offset) / tileArcLength) - 1;
-    const pieces = [];
-    for (let tile = firstTile; tile <= lastTile; tile += 1) {
-      const arcStart = tile * tileArcLength + offset;
-      pieces.push({
-        name: `warped tile ${tile - firstTile + 1}`,
-        network: warpSingle(network, bounds, arcTable, thicknessScale, arcStart, tileArcLength, true)
-      });
-    }
-    return pieces;
   }
   function warpPoint(point, bounds, baselineY, arcTable, thicknessScale, arcStart, arcSpan, extendBeyondPath) {
     const u = (point.x - bounds.minX) / bounds.width;
@@ -1176,15 +1162,56 @@
   function isCurrentOutput(node) {
     return linked?.outputId === node.id;
   }
+  function buildSourceSnapshotName(currentSettings) {
+    return [
+      OUTPUT_SOURCE_NAME,
+      "v=1",
+      `live=${currentSettings.livePreview ? 1 : 0}`,
+      `thickness=${currentSettings.thicknessScale.toFixed(4)}`,
+      `offset=${currentSettings.patternOffset.toFixed(4)}`,
+      `path=${Math.round(currentSettings.pathSmoothing)}`
+    ].join("|");
+  }
+  function parseSourceSnapshotSettings(name) {
+    const prefix = `${OUTPUT_SOURCE_NAME}|`;
+    if (!name.startsWith(prefix)) return null;
+    const values = {};
+    for (const item of name.slice(prefix.length).split("|")) {
+      const separator = item.indexOf("=");
+      if (separator <= 0) continue;
+      values[item.slice(0, separator)] = item.slice(separator + 1);
+    }
+    const thicknessScale = Number(values.thickness);
+    const patternOffset = Number(values.offset);
+    const pathSmoothing = Number(values.path);
+    if (!Number.isFinite(thicknessScale) || !Number.isFinite(patternOffset) || !Number.isFinite(pathSmoothing)) return null;
+    return {
+      livePreview: values.live === "1",
+      thicknessScale: clamp(thicknessScale, 0.1, 3),
+      patternOffset: clamp(patternOffset, -1, 1),
+      pathSmoothing: clamp(Math.round(pathSmoothing), 0, 10)
+    };
+  }
+  function postSettingsToUi() {
+    figma.ui.postMessage({
+      type: "settings",
+      settings: {
+        livePreview: settings.livePreview,
+        thicknessScale: settings.thicknessScale,
+        patternOffset: settings.patternOffset,
+        pathSmoothing: settings.pathSmoothing
+      }
+    });
+  }
   function findEmbeddedOutputParts(frame) {
     if (!frame.name.startsWith(OUTPUT_NAME_PREFIX)) return null;
     const namedTarget = frame.children.find((child) => child.type === "VECTOR" && child.name === OUTPUT_TARGET_NAME);
     const firstChild = frame.children[0];
     const targetGuide = namedTarget ?? (firstChild?.type === "VECTOR" ? firstChild : null);
-    const namedSource = frame.children.find((child) => child.name === OUTPUT_SOURCE_NAME && isSceneNode(child));
+    const namedSource = frame.children.find((child) => child.name.startsWith(OUTPUT_SOURCE_NAME) && isSceneNode(child));
     const sourceSnapshot = namedSource ?? frame.children.find((child) => isSceneNode(child) && child !== targetGuide && child.visible === false) ?? null;
     if (!sourceSnapshot || !targetGuide) return null;
-    return { sourceSnapshot, targetGuide };
+    return { sourceSnapshot, targetGuide, persistedSettings: parseSourceSnapshotSettings(sourceSnapshot.name) };
   }
   function findOutputFrameForNode(node) {
     let current = node;
@@ -1205,6 +1232,14 @@
     if (!embedded) return false;
     const alreadyLinked = linked?.outputId === frame.id && linked.targetId === embedded.targetGuide.id;
     if (alreadyLinked) return false;
+    if (embedded.persistedSettings) {
+      settings = {
+        ...settings,
+        ...embedded.persistedSettings,
+        smoothness: DEFAULT_SOURCE_SMOOTHNESS
+      };
+      postSettingsToUi();
+    }
     linked = {
       sourceId: embedded.sourceSnapshot.id,
       targetId: embedded.targetGuide.id,
