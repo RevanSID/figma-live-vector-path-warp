@@ -68,12 +68,10 @@
       .warp-preview {
         position: absolute;
         z-index: 0;
-        right: 0;
-        bottom: 0;
+        top: 333px;
         left: 0;
         width: 320px;
         height: 244px;
-        margin: 0 auto;
         opacity: 1;
         pointer-events: none;
         filter: none;
@@ -83,7 +81,7 @@
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: contain;
+        object-fit: cover;
       }
 
       header,
@@ -164,7 +162,7 @@
 
       .options {
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 6px;
       }
 
@@ -500,6 +498,11 @@
             <span>Live Preview</span>
             <input id="livePreview" type="checkbox" checked />
           </label>
+
+          <label class="toggle">
+            <span>Lock scale</span>
+            <input id="lockScale" type="checkbox" checked />
+          </label>
         </section>
 
         <section class="controls" aria-label="Warp controls">
@@ -513,10 +516,26 @@
 
           <label class="slider">
             <span class="row">
+              <span>Tile Scale</span>
+              <output id="tileScaleValue">100%</output>
+            </span>
+            <input id="tileScale" type="range" min="10" max="300" step="1" value="100" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
               <span>Pattern Offset</span>
               <output id="patternOffsetValue">0%</output>
             </span>
             <input id="patternOffset" type="range" min="-100" max="100" step="1" value="0" />
+          </label>
+
+          <label class="slider">
+            <span class="row">
+              <span>Smoothness</span>
+              <output id="smoothnessValue">4</output>
+            </span>
+            <input id="smoothness" type="range" min="1" max="10" step="1" value="4" />
           </label>
 
           <label class="slider">
@@ -527,6 +546,16 @@
             <input id="pathSmoothing" type="range" min="0" max="10" step="1" value="2" />
           </label>
         </section>
+
+        <label class="field">
+          <span class="field-title">Fitting Method</span>
+          <span class="select-wrap">
+            <select id="fit">
+              <option value="repeat" selected>Repeat</option>
+              <option value="stretch">Stretch to Fit</option>
+            </select>
+          </span>
+        </label>
 
         <button id="start" type="button"><span>Start</span></button>
       </div>
