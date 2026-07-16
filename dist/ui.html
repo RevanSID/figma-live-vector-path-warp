@@ -27,7 +27,8 @@
       html,
       body {
         width: 100%;
-        min-height: 100%;
+        height: auto;
+        min-height: 0;
       }
 
       body {
@@ -49,7 +50,8 @@
         position: relative;
         display: block;
         width: 100%;
-        min-height: 100vh;
+        height: auto;
+        min-height: 0;
         padding: 16px;
         overflow: hidden;
       }
@@ -68,10 +70,12 @@
       .warp-preview {
         position: absolute;
         z-index: 0;
-        top: 333px;
+        right: 0;
+        bottom: 0;
         left: 0;
         width: 320px;
         height: 244px;
+        margin: 0 auto;
         opacity: 1;
         pointer-events: none;
         filter: none;
@@ -81,7 +85,7 @@
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
       }
 
       header,
@@ -532,30 +536,12 @@
 
           <label class="slider">
             <span class="row">
-              <span>Smoothness</span>
-              <output id="smoothnessValue">4</output>
-            </span>
-            <input id="smoothness" type="range" min="1" max="10" step="1" value="4" />
-          </label>
-
-          <label class="slider">
-            <span class="row">
               <span>Path Smoothing</span>
               <output id="pathSmoothingValue">2</output>
             </span>
             <input id="pathSmoothing" type="range" min="0" max="10" step="1" value="2" />
           </label>
         </section>
-
-        <label class="field">
-          <span class="field-title">Fitting Method</span>
-          <span class="select-wrap">
-            <select id="fit">
-              <option value="repeat" selected>Repeat</option>
-              <option value="stretch">Stretch to Fit</option>
-            </select>
-          </span>
-        </label>
 
         <button id="start" type="button"><span>Start</span></button>
       </div>
@@ -572,24 +558,20 @@
   var tileScaleValue = document.getElementById("tileScaleValue");
   var patternOffset = document.getElementById("patternOffset");
   var patternOffsetValue = document.getElementById("patternOffsetValue");
-  var smoothness = document.getElementById("smoothness");
-  var smoothnessValue = document.getElementById("smoothnessValue");
   var pathSmoothing = document.getElementById("pathSmoothing");
   var pathSmoothingValue = document.getElementById("pathSmoothingValue");
-  var fit = document.getElementById("fit");
   var start = document.getElementById("start");
   var status = document.getElementById("status");
-  var ranges = [scale, tileScale, patternOffset, smoothness, pathSmoothing];
+  var ranges = [scale, tileScale, patternOffset, pathSmoothing];
   function sendSettings() {
     const payload = {
       type: "settings",
       livePreview: livePreview.checked,
+      lockScale: lockScale.checked,
       thicknessScale: Number(scale.value) / 100,
       tileScale: Number(tileScale.value) / 100,
       patternOffset: Number(patternOffset.value) / 100,
-      smoothness: Number(smoothness.value),
-      pathSmoothing: Number(pathSmoothing.value),
-      fitMethod: fit.value
+      pathSmoothing: Number(pathSmoothing.value)
     };
     parent.postMessage({ pluginMessage: payload }, "*");
   }
@@ -602,9 +584,17 @@
     tileScaleValue.value = `${tileScale.value}%`;
     const offset = Number(patternOffset.value);
     patternOffsetValue.value = `${offset > 0 ? "+" : ""}${offset}%`;
-    smoothnessValue.value = smoothness.value;
     pathSmoothingValue.value = pathSmoothing.value;
     for (const range of ranges) updateRangeProgress(range);
+  }
+  function applySettings(next) {
+    livePreview.checked = next.livePreview;
+    lockScale.checked = next.lockScale;
+    scale.value = String(Math.round(next.thicknessScale * 100));
+    tileScale.value = String(Math.round(next.tileScale * 100));
+    patternOffset.value = String(Math.round(next.patternOffset * 100));
+    pathSmoothing.value = String(Math.round(next.pathSmoothing));
+    updateLabels();
   }
   function setStatus(message, isError = false) {
     status.textContent = message;
@@ -656,7 +646,7 @@
     updateLabels();
     sendSettings();
   });
-  for (const control of [livePreview, lockScale, patternOffset, smoothness, pathSmoothing, fit]) {
+  for (const control of [livePreview, lockScale, patternOffset, pathSmoothing]) {
     control.addEventListener("input", () => {
       updateLabels();
       sendSettings();
@@ -669,14 +659,28 @@
   window.onmessage = (event) => {
     const message = event.data.pluginMessage;
     if (!message) return;
-    if (message.type === "selection" && message.state) {
+    if (message.type === "settings" && message.settings) {
+      applySettings(message.settings);
+      return;
+    }
+    if (message.type === "selection" && message.state && message.message) {
       setSelectionStatus(message.message, message.state);
       return;
     }
-    setStatus(message.message, message.type === "error");
+    setStatus(message.message ?? "", message.type === "error");
   };
   updateLabels();
-  sendSettings();
+  var glassCard = document.querySelector(".glass-card");
+  function sendResize() {
+    if (!glassCard) return;
+    const height = Math.ceil(glassCard.getBoundingClientRect().bottom + 16);
+    parent.postMessage({ pluginMessage: { type: "resize", height } }, "*");
+  }
+  if (glassCard && "ResizeObserver" in window) {
+    new ResizeObserver(sendResize).observe(glassCard);
+  }
+  window.addEventListener("load", sendResize);
+  sendResize();
 })();
 </script>
   </body>

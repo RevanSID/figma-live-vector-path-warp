@@ -11,11 +11,11 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 ## Features
 
 - Arc-length parameterization for cubic Bezier paths.
-- Repeat and Stretch to Fit modes.
+- Repeat mode with tile-scale and pattern-offset controls.
 - Live preview while editing the selected path.
 - Source support for vectors, frames, groups, components, and instances that can be flattened by Figma.
 - Stroke-to-vector conversion with Figma's native `outlineStroke()` API before deformation.
-- Geometry subdivision and separate path-smoothing controls.
+- Fixed high-quality source geometry subdivision and separate path-smoothing control.
 - Scale/thickness and tile-scale ratio lock.
 - Pattern offset control for shifting the repeat phase along the target path.
 - Target vertex corner radii are approximated as rounded cubic joins before arc-length mapping.
@@ -25,7 +25,7 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 
 ## Interface
 
-The plugin provides live canvas preview, repeat and stretch fitting, thickness and tile-scale controls, path smoothing, and a lock for preserving the source pattern ratio.
+The plugin provides live canvas preview, repeat fitting, thickness and tile-scale controls, path smoothing, and a lock for preserving the source pattern ratio.
 
 ![Live Vector Path Warp interface](docs/plugin-ui.png)
 

@@ -3,6 +3,7 @@
   // src/main.ts
   var EPSILON = 1e-6;
   var TARGET_SAMPLE_PX = 3;
+  var DEFAULT_SOURCE_SMOOTHNESS = 10;
   var OUTPUT_NAME_PREFIX = "Live Vector Path Warp";
   var OUTPUT_SOURCE_NAME = "__Live Vector Path Warp Source Snapshot";
   var OUTPUT_TARGET_NAME = "__Live Vector Path Warp Editable Path";
@@ -10,12 +11,12 @@
   var settings = {
     type: "settings",
     livePreview: true,
+    lockScale: true,
     thicknessScale: 1,
     tileScale: 1,
     patternOffset: 0,
-    smoothness: 4,
-    pathSmoothing: 2,
-    fitMethod: "repeat"
+    smoothness: DEFAULT_SOURCE_SMOOTHNESS,
+    pathSmoothing: 2
   };
   var linked = null;
   var renderTimer;
@@ -26,7 +27,7 @@
   var detachOutputOnNextRender = false;
   var arrangeSnapshotsOnNextRender = false;
   var autoArrangeSnapshotIds = [];
-  figma.showUI(__html__, { width: 320, height: 650, themeColors: true });
+  figma.showUI(__html__, { width: 320, height: 500, themeColors: true });
   figma.on("selectionchange", () => {
     if (isRendering) return;
     const restored = restoreLinkedOutputFromSelection();
@@ -38,13 +39,19 @@
       startFromSelection();
       return;
     }
+    if (message.type === "resize") {
+      const height = Number.isFinite(message.height) ? Math.ceil(message.height) : 500;
+      figma.ui.resize(320, Math.max(240, height));
+      return;
+    }
     if (message.type === "settings") {
-      settings = { ...settings, ...message };
+      settings = { ...settings, ...message, smoothness: DEFAULT_SOURCE_SMOOTHNESS };
       scheduleRender("settings", 20, true);
     }
   };
   void initializeDocumentWatcher();
   var restoredOnLaunch = restoreLinkedOutputFromSelection();
+  postSettingsToUi();
   postSelectionStatus();
   if (restoredOnLaunch) scheduleRender("restore on launch", 20, true);
   async function initializeDocumentWatcher() {
@@ -157,18 +164,14 @@
         throw new Error("Flattened source must have measurable width.");
       }
       const preparedNetwork = subdivideNetworkForWarp(flattened.vectorNetwork, settings.smoothness);
-      const warpedPieces = settings.fitMethod === "repeat" ? buildRepeatedPieces(preparedNetwork, sourceBounds, arcTable, settings.thicknessScale, settings.tileScale, settings.patternOffset) : [{
-        name: "warped vector",
-        network: warpSingle(
-          preparedNetwork,
-          sourceBounds,
-          arcTable,
-          settings.thicknessScale,
-          settings.patternOffset * arcTable.totalLength,
-          arcTable.totalLength,
-          true
-        )
-      }];
+      const warpedPieces = buildRepeatedPieces(
+        preparedNetwork,
+        sourceBounds,
+        arcTable,
+        settings.thicknessScale,
+        settings.tileScale,
+        settings.patternOffset
+      );
       const clipNetwork = buildPathEnvelopeNetwork(arcTable, sourceBounds.height * settings.thicknessScale);
       if (linked !== activeLink) {
         flattened.remove();
@@ -188,7 +191,7 @@
       if (arrangeSnapshotsOnNextRender) await arrangeSnapshotsRightOf(output.frame);
       selectEditablePath(output.targetGuide);
       const segmentCount = warpedPieces.reduce((sum, piece) => sum + piece.network.segments.length, 0);
-      postStatus(`Preview updated: ${source.name}. Tile-stacked vector. Tiles: ${warpedPieces.length}. Segments: ${segmentCount}.`);
+      postStatus(`Preview updated: ${source.name}. Repeat vector. Tiles: ${warpedPieces.length}. Segments: ${segmentCount}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown live preview error.";
       if (message.toLowerCase().includes("does not exist") || message.toLowerCase().includes("removed")) {
@@ -214,7 +217,6 @@
       sourceId,
       targetId,
       arcSignature(arcTable),
-      settings.fitMethod,
       settings.thicknessScale,
       settings.tileScale,
       settings.patternOffset,
@@ -262,7 +264,7 @@
     frame.resizeWithoutConstraints(frameWidth, frameHeight);
     frame.relativeTransform = absolutePageTransformForParent(parent, frameOrigin);
     parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
-    const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, OUTPUT_SOURCE_NAME, false, { x: 4, y: 4 });
+    const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
     const targetGuide = cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
     if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
     frame.insertChild(0, targetGuide);
@@ -1176,15 +1178,63 @@
   function isCurrentOutput(node) {
     return linked?.outputId === node.id;
   }
+  function buildSourceSnapshotName(currentSettings) {
+    return [
+      OUTPUT_SOURCE_NAME,
+      "v=1",
+      `live=${currentSettings.livePreview ? 1 : 0}`,
+      `lock=${currentSettings.lockScale ? 1 : 0}`,
+      `thickness=${currentSettings.thicknessScale.toFixed(4)}`,
+      `tile=${currentSettings.tileScale.toFixed(4)}`,
+      `offset=${currentSettings.patternOffset.toFixed(4)}`,
+      `path=${Math.round(currentSettings.pathSmoothing)}`
+    ].join("|");
+  }
+  function parseSourceSnapshotSettings(name) {
+    const prefix = `${OUTPUT_SOURCE_NAME}|`;
+    if (!name.startsWith(prefix)) return null;
+    const values = {};
+    for (const item of name.slice(prefix.length).split("|")) {
+      const separator = item.indexOf("=");
+      if (separator <= 0) continue;
+      values[item.slice(0, separator)] = item.slice(separator + 1);
+    }
+    const thicknessScale = Number(values.thickness);
+    const tileScale = Number(values.tile);
+    const patternOffset = Number(values.offset);
+    const pathSmoothing = Number(values.path);
+    if (!Number.isFinite(thicknessScale) || !Number.isFinite(tileScale) || !Number.isFinite(patternOffset) || !Number.isFinite(pathSmoothing)) return null;
+    return {
+      livePreview: values.live === "1",
+      lockScale: values.lock === "1",
+      thicknessScale: clamp(thicknessScale, 0.1, 3),
+      tileScale: clamp(tileScale, 0.1, 3),
+      patternOffset: clamp(patternOffset, -1, 1),
+      pathSmoothing: clamp(Math.round(pathSmoothing), 0, 10)
+    };
+  }
+  function postSettingsToUi() {
+    figma.ui.postMessage({
+      type: "settings",
+      settings: {
+        livePreview: settings.livePreview,
+        lockScale: settings.lockScale,
+        thicknessScale: settings.thicknessScale,
+        tileScale: settings.tileScale,
+        patternOffset: settings.patternOffset,
+        pathSmoothing: settings.pathSmoothing
+      }
+    });
+  }
   function findEmbeddedOutputParts(frame) {
     if (!frame.name.startsWith(OUTPUT_NAME_PREFIX)) return null;
     const namedTarget = frame.children.find((child) => child.type === "VECTOR" && child.name === OUTPUT_TARGET_NAME);
     const firstChild = frame.children[0];
     const targetGuide = namedTarget ?? (firstChild?.type === "VECTOR" ? firstChild : null);
-    const namedSource = frame.children.find((child) => child.name === OUTPUT_SOURCE_NAME && isSceneNode(child));
+    const namedSource = frame.children.find((child) => child.name.startsWith(OUTPUT_SOURCE_NAME) && isSceneNode(child));
     const sourceSnapshot = namedSource ?? frame.children.find((child) => isSceneNode(child) && child !== targetGuide && child.visible === false) ?? null;
     if (!sourceSnapshot || !targetGuide) return null;
-    return { sourceSnapshot, targetGuide };
+    return { sourceSnapshot, targetGuide, persistedSettings: parseSourceSnapshotSettings(sourceSnapshot.name) };
   }
   function findOutputFrameForNode(node) {
     let current = node;
@@ -1205,6 +1255,14 @@
     if (!embedded) return false;
     const alreadyLinked = linked?.outputId === frame.id && linked.targetId === embedded.targetGuide.id;
     if (alreadyLinked) return false;
+    if (embedded.persistedSettings) {
+      settings = {
+        ...settings,
+        ...embedded.persistedSettings,
+        smoothness: DEFAULT_SOURCE_SMOOTHNESS
+      };
+      postSettingsToUi();
+    }
     linked = {
       sourceId: embedded.sourceSnapshot.id,
       targetId: embedded.targetGuide.id,

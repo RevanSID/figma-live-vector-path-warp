@@ -27,7 +27,8 @@
       html,
       body {
         width: 100%;
-        min-height: 100%;
+        height: auto;
+        min-height: 0;
       }
 
       body {
@@ -49,7 +50,8 @@
         position: relative;
         display: block;
         width: 100%;
-        min-height: 100vh;
+        height: auto;
+        min-height: 0;
         padding: 16px;
         overflow: hidden;
       }
@@ -68,10 +70,12 @@
       .warp-preview {
         position: absolute;
         z-index: 0;
-        top: 333px;
+        right: 0;
+        bottom: 0;
         left: 0;
         width: 320px;
         height: 244px;
+        margin: 0 auto;
         opacity: 1;
         pointer-events: none;
         filter: none;
@@ -81,7 +85,7 @@
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
       }
 
       header,
@@ -532,30 +536,12 @@
 
           <label class="slider">
             <span class="row">
-              <span>Smoothness</span>
-              <output id="smoothnessValue">4</output>
-            </span>
-            <input id="smoothness" type="range" min="1" max="10" step="1" value="4" />
-          </label>
-
-          <label class="slider">
-            <span class="row">
               <span>Path Smoothing</span>
               <output id="pathSmoothingValue">2</output>
             </span>
             <input id="pathSmoothing" type="range" min="0" max="10" step="1" value="2" />
           </label>
         </section>
-
-        <label class="field">
-          <span class="field-title">Fitting Method</span>
-          <span class="select-wrap">
-            <select id="fit">
-              <option value="repeat" selected>Repeat</option>
-              <option value="stretch">Stretch to Fit</option>
-            </select>
-          </span>
-        </label>
 
         <button id="start" type="button"><span>Start</span></button>
       </div>
