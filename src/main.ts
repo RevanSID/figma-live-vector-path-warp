@@ -433,6 +433,13 @@ async function createOutputFrame(
       if (detachOutputOnNextRender && previousScene) rememberAutoArrangeSnapshot(previousScene);
     }
   }
+  const reusableTargetTransform =
+    !keepPrevious &&
+    linked?.targetFromOutput === true &&
+    previousScene !== null &&
+    target.parent?.id === previousScene.id
+      ? target.absoluteTransform
+      : null;
 
   const networkBounds = boundsFromNetwork(clipNetwork);
   const padding = 2;
@@ -458,8 +465,17 @@ async function createOutputFrame(
   parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
 
   const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
-  const targetGuide = cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
+  const targetGuide = reusableTargetTransform
+    ? target
+    : cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
   if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
+  if (reusableTargetTransform) {
+    frame.appendChild(targetGuide);
+    targetGuide.locked = false;
+    targetGuide.name = OUTPUT_TARGET_NAME;
+    targetGuide.visible = true;
+    targetGuide.relativeTransform = relativeTransformForParent(frame, reusableTargetTransform);
+  }
   frame.insertChild(0, targetGuide);
 
   if (previous && !keepPrevious) previous.remove();
