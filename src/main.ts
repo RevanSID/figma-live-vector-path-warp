@@ -191,6 +191,26 @@ async function initializeDocumentWatcher() {
 }
 
 function startFromSelection() {
+  const rawSelection = figma.currentPage.selection;
+  const replacement = resolveOutputReplacementSelection(rawSelection);
+  if (replacement) {
+    applyPersistedSettings(replacement.embedded.persistedSettings);
+    linked = {
+      sourceId: replacement.source.id,
+      targetId: replacement.embedded.targetGuide.id,
+      outputId: replacement.frame.id,
+      outputMeta: captureOutputMeta(replacement.frame),
+      sourceFromOutput: false,
+      targetFromOutput: true
+    };
+    detachOutputOnNextRender = false;
+    arrangeSnapshotsOnNextRender = false;
+    lastRenderKey = "";
+    postStatus(`New source linked to ${replacement.embedded.targetGuide.name}. Existing path will be kept.`);
+    scheduleRender("replace source", 20, true);
+    return;
+  }
+
   if (getSelectedOutputFrame()) {
     restoreLinkedOutputFromSelection();
     postStatus("Live frame restored. Editable path is selected.");
@@ -199,7 +219,7 @@ function startFromSelection() {
     return;
   }
 
-  const selection = figma.currentPage.selection.filter((node) => !isCurrentOutput(node));
+  const selection = rawSelection.filter((node) => !isCurrentOutput(node));
   if (selection.length !== 2) {
     postStatus("Нужно выделить ровно 2 слоя: source и vector path.", true);
     return;
@@ -233,6 +253,24 @@ function resolveSourceAndTarget(a: SceneNode, b: SceneNode): { source: SceneNode
     return targetPathScore(a) >= targetPathScore(b) ? { source: b, target: a } : { source: a, target: b };
   }
   return null;
+}
+
+function resolveOutputReplacementSelection(selection: readonly SceneNode[]): {
+  frame: FrameNode;
+  source: SceneNode;
+  embedded: NonNullable<ReturnType<typeof findEmbeddedOutputParts>>;
+} | null {
+  if (selection.length !== 2) return null;
+
+  const frame = selection.map(findOutputFrameForNode).find((candidate): candidate is FrameNode => candidate !== null);
+  if (!frame) return null;
+
+  const source = selection.find((node) => findOutputFrameForNode(node)?.id !== frame.id);
+  if (!source) return null;
+
+  const embedded = findEmbeddedOutputParts(frame);
+  if (!embedded || source.id === embedded.targetGuide.id || source.id === embedded.sourceSnapshot.id) return null;
+  return { frame, source, embedded };
 }
 
 function scheduleRender(reason: string, delay = 140, force = false) {
@@ -1727,14 +1765,7 @@ function restoreLinkedOutputFromSelection(): boolean {
     linked.targetId === embedded.targetGuide.id;
   if (alreadyLinked) return false;
 
-  if (embedded.persistedSettings) {
-    settings = {
-      ...settings,
-      ...embedded.persistedSettings,
-      smoothness: DEFAULT_SOURCE_SMOOTHNESS
-    };
-    postSettingsToUi();
-  }
+  applyPersistedSettings(embedded.persistedSettings);
 
   linked = {
     sourceId: embedded.sourceSnapshot.id,
@@ -1750,8 +1781,27 @@ function restoreLinkedOutputFromSelection(): boolean {
   return true;
 }
 
+function applyPersistedSettings(persistedSettings: PersistedSettings | null) {
+  if (!persistedSettings) return;
+  settings = {
+    ...settings,
+    ...persistedSettings,
+    smoothness: DEFAULT_SOURCE_SMOOTHNESS
+  };
+  postSettingsToUi();
+}
+
 function postSelectionStatus() {
   const rawSelection = figma.currentPage.selection;
+  if (resolveOutputReplacementSelection(rawSelection)) {
+    figma.ui.postMessage({
+      type: "selection",
+      state: "ready",
+      message: "Live frame + new source selected — ready to replace source."
+    });
+    return;
+  }
+
   if (rawSelection.length === 1 && findOutputFrameForNode(rawSelection[0])) {
     figma.ui.postMessage({ type: "selection", state: "ready", message: "Live frame selected — path editing is ready." });
     return;

@@ -1,6 +1,6 @@
 {
   "name": "figma-path-warping-live-raster-plugin",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "A Figma plugin that flattens source layers to vectors and live-previews brush warping along Bezier paths.",
   "scripts": {
