@@ -335,7 +335,7 @@ async function renderLivePreview(_reason: string, force = false) {
     if (!force && renderKey === lastRenderKey) return;
     lastRenderKey = renderKey;
 
-    const flattened = flattenSourceToVector(source);
+    const flattened = await flattenSourceToVector(source);
     const sourceBounds = boundsFromNetwork(flattened.vectorNetwork);
     if (sourceBounds.width <= EPSILON) {
       flattened.remove();
@@ -406,7 +406,7 @@ function buildRenderKey(sourceId: string, targetId: string, arcTable: ArcTable):
   ].join("|");
 }
 
-function flattenSourceToVector(source: SceneNode): VectorNode {
+async function flattenSourceToVector(source: SceneNode): Promise<VectorNode> {
   const sourceTransform = source.absoluteTransform;
   const clone = source.clone();
   clone.name = `${source.name} - warp source flatten`;
@@ -414,7 +414,8 @@ function flattenSourceToVector(source: SceneNode): VectorNode {
   clone.locked = false;
   clone.visible = true;
   clone.relativeTransform = sourceTransform;
-  const background = createContainerBackground(source);
+  await copyResolvedVariableModes(source, clone);
+  const background = await createContainerBackground(source);
   const flattened = figma.flatten(background ? [clone, background] : [clone], figma.currentPage);
   const topLevelOutlines = outlineStrokesBeforeFlatten(flattened);
   return topLevelOutlines.length > 0
@@ -476,6 +477,7 @@ async function createOutputFrame(
   frame.resizeWithoutConstraints(frameWidth, frameHeight);
   frame.relativeTransform = relativeTransformForParent(parent, frameAbsoluteTransform);
   parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
+  await copyResolvedVariableModes(source, frame);
 
   const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
   const targetGuide = reusableTargetTransform
@@ -626,7 +628,7 @@ function subsetNetworkForSegments(network: VectorNetwork, segmentIndices: number
   };
 }
 
-function createContainerBackground(source: SceneNode): RectangleNode | null {
+async function createContainerBackground(source: SceneNode): Promise<RectangleNode | null> {
   if (!hasChildren(source) || !("fills" in source) || !("width" in source) || !("height" in source)) return null;
   if (!Array.isArray(source.fills) || source.fills.length === 0) return null;
   if (source.fills.every((fill) => fill.visible === false)) return null;
@@ -638,6 +640,7 @@ function createContainerBackground(source: SceneNode): RectangleNode | null {
   background.strokes = [];
   figma.currentPage.appendChild(background);
   background.relativeTransform = source.absoluteTransform;
+  await copyResolvedVariableModes(source, background);
   return background;
 }
 
@@ -744,6 +747,18 @@ async function normalizePaints(paints: readonly Paint[]): Promise<Paint[]> {
 
 function sanitizePaints(paints: readonly Paint[]): Paint[] {
   return paints.filter(isSettablePaint);
+}
+
+async function copyResolvedVariableModes(source: SceneNode, target: SceneNode) {
+  for (const [collectionId, modeId] of Object.entries(source.resolvedVariableModes)) {
+    const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+    if (!collection) continue;
+    try {
+      target.setExplicitVariableModeForCollection(collection, modeId);
+    } catch {
+      // A deleted or inaccessible collection should not block the warp.
+    }
+  }
 }
 
 function collectPaintVariableBindings(root: SceneNode): PaintVariableBinding[] {

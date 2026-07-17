@@ -188,7 +188,7 @@
       const renderKey = buildRenderKey(source.id, target.id, arcTable);
       if (!force && renderKey === lastRenderKey) return;
       lastRenderKey = renderKey;
-      const flattened = flattenSourceToVector(source);
+      const flattened = await flattenSourceToVector(source);
       const sourceBounds = boundsFromNetwork(flattened.vectorNetwork);
       if (sourceBounds.width <= EPSILON) {
         flattened.remove();
@@ -255,7 +255,7 @@
       settings.pathSmoothing
     ].join("|");
   }
-  function flattenSourceToVector(source) {
+  async function flattenSourceToVector(source) {
     const sourceTransform = source.absoluteTransform;
     const clone = source.clone();
     clone.name = `${source.name} - warp source flatten`;
@@ -263,7 +263,8 @@
     clone.locked = false;
     clone.visible = true;
     clone.relativeTransform = sourceTransform;
-    const background = createContainerBackground(source);
+    await copyResolvedVariableModes(source, clone);
+    const background = await createContainerBackground(source);
     const flattened = figma.flatten(background ? [clone, background] : [clone], figma.currentPage);
     const topLevelOutlines = outlineStrokesBeforeFlatten(flattened);
     return topLevelOutlines.length > 0 ? figma.flatten([flattened, ...topLevelOutlines], figma.currentPage) : flattened;
@@ -302,6 +303,7 @@
     frame.resizeWithoutConstraints(frameWidth, frameHeight);
     frame.relativeTransform = relativeTransformForParent(parent, frameAbsoluteTransform);
     parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
+    await copyResolvedVariableModes(source, frame);
     const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
     const targetGuide = reusableTargetTransform ? target : cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
     if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
@@ -416,7 +418,7 @@
       regions: loops.length > 0 ? [{ windingRule: "NONZERO", loops }] : []
     };
   }
-  function createContainerBackground(source) {
+  async function createContainerBackground(source) {
     if (!hasChildren(source) || !("fills" in source) || !("width" in source) || !("height" in source)) return null;
     if (!Array.isArray(source.fills) || source.fills.length === 0) return null;
     if (source.fills.every((fill) => fill.visible === false)) return null;
@@ -427,6 +429,7 @@
     background.strokes = [];
     figma.currentPage.appendChild(background);
     background.relativeTransform = source.absoluteTransform;
+    await copyResolvedVariableModes(source, background);
     return background;
   }
   function outlineStrokesBeforeFlatten(root) {
@@ -517,6 +520,16 @@
   }
   function sanitizePaints(paints) {
     return paints.filter(isSettablePaint);
+  }
+  async function copyResolvedVariableModes(source, target) {
+    for (const [collectionId, modeId] of Object.entries(source.resolvedVariableModes)) {
+      const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+      if (!collection) continue;
+      try {
+        target.setExplicitVariableModeForCollection(collection, modeId);
+      } catch {
+      }
+    }
   }
   function collectPaintVariableBindings(root) {
     const bindings = [];
