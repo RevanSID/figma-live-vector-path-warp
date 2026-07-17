@@ -114,6 +114,11 @@ interface RegionPart {
   strokes?: Paint[];
 }
 
+interface PaintVariableBinding {
+  signature: string;
+  boundVariables: Record<string, VariableAlias>;
+}
+
 const EPSILON = 1e-6;
 const TARGET_SAMPLE_PX = 3;
 const DEFAULT_SOURCE_SMOOTHNESS = 10;
@@ -409,9 +414,12 @@ function flattenSourceToVector(source: SceneNode): VectorNode {
   clone.locked = false;
   clone.visible = true;
   clone.relativeTransform = sourceTransform;
-  insertContainerBackgroundIntoClone(clone, source);
-  const topLevelOutlines = outlineStrokesBeforeFlatten(clone);
-  return figma.flatten([clone, ...topLevelOutlines], figma.currentPage);
+  const background = createContainerBackground(source);
+  const flattened = figma.flatten(background ? [clone, background] : [clone], figma.currentPage);
+  const topLevelOutlines = outlineStrokesBeforeFlatten(flattened);
+  return topLevelOutlines.length > 0
+    ? figma.flatten([flattened, ...topLevelOutlines], figma.currentPage)
+    : flattened;
 }
 
 async function createOutputFrame(
@@ -446,6 +454,11 @@ async function createOutputFrame(
   const frameOrigin = { x: networkBounds.minX - padding, y: networkBounds.minY - padding };
   const frameWidth = Math.max(1, networkBounds.width + padding * 2);
   const frameHeight = Math.max(1, networkBounds.height + padding * 2);
+  const frameAbsoluteTransform = multiplyTransform(target.absoluteTransform, [
+    [1, 0, frameOrigin.x],
+    [0, 1, frameOrigin.y]
+  ]);
+  const paintBindings = collectPaintVariableBindings(source);
 
   const reuseOutputPlacement = linked?.targetFromOutput === true && previousParent !== null && previousIndex >= 0;
   const parent = reuseOutputPlacement
@@ -461,7 +474,7 @@ async function createOutputFrame(
   frame.fills = [];
   frame.strokes = [];
   frame.resizeWithoutConstraints(frameWidth, frameHeight);
-  frame.relativeTransform = absolutePageTransformForParent(parent, frameOrigin);
+  frame.relativeTransform = relativeTransformForParent(parent, frameAbsoluteTransform);
   parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
 
   const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
@@ -494,8 +507,8 @@ async function createOutputFrame(
     ];
     const localizedNetwork = await normalizeVectorNetworkPaints(translateNetwork(part.network, -frameOrigin.x, -frameOrigin.y));
     await vector.setVectorNetworkAsync(localizedNetwork);
-    vector.fills = part.fills ? [...part.fills] : [];
-    vector.strokes = part.strokes ? [...part.strokes] : [];
+    vector.fills = part.fills ? restorePaintBindings(part.fills, paintBindings) : [];
+    vector.strokes = part.strokes ? restorePaintBindings(part.strokes, paintBindings) : [];
   }
 
   frame.expanded = true;
@@ -613,26 +626,19 @@ function subsetNetworkForSegments(network: VectorNetwork, segmentIndices: number
   };
 }
 
-function insertContainerBackgroundIntoClone(clone: SceneNode, source: SceneNode) {
-  if (!hasChildren(clone) || !("fills" in source) || !("width" in source) || !("height" in source)) return;
-  if (!Array.isArray(source.fills) || source.fills.length === 0) return;
-  if (source.fills.every((fill) => fill.visible === false)) return;
+function createContainerBackground(source: SceneNode): RectangleNode | null {
+  if (!hasChildren(source) || !("fills" in source) || !("width" in source) || !("height" in source)) return null;
+  if (!Array.isArray(source.fills) || source.fills.length === 0) return null;
+  if (source.fills.every((fill) => fill.visible === false)) return null;
 
   const background = figma.createRectangle();
   background.name = `${source.name} - flatten background`;
   background.resizeWithoutConstraints(source.width, source.height);
   background.fills = source.fills;
   background.strokes = [];
-  background.relativeTransform = [
-    [1, 0, 0],
-    [0, 1, 0]
-  ];
-
-  try {
-    clone.insertChild(0, background);
-  } catch {
-    background.remove();
-  }
+  figma.currentPage.appendChild(background);
+  background.relativeTransform = source.absoluteTransform;
+  return background;
 }
 
 function outlineStrokesBeforeFlatten(root: SceneNode): VectorNode[] {
@@ -738,6 +744,64 @@ async function normalizePaints(paints: readonly Paint[]): Promise<Paint[]> {
 
 function sanitizePaints(paints: readonly Paint[]): Paint[] {
   return paints.filter(isSettablePaint);
+}
+
+function collectPaintVariableBindings(root: SceneNode): PaintVariableBinding[] {
+  const bindings: PaintVariableBinding[] = [];
+  const seen = new Set<string>();
+
+  const collect = (paints: readonly Paint[]) => {
+    for (const paint of paints) {
+      const boundVariables = (paint as Paint & { boundVariables?: Record<string, VariableAlias> }).boundVariables;
+      if (!boundVariables || Object.keys(boundVariables).length === 0) continue;
+      const signature = paintSignature(paint);
+      const key = `${signature}|${JSON.stringify(boundVariables)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      bindings.push({ signature, boundVariables: { ...boundVariables } });
+    }
+  };
+
+  const visit = (node: SceneNode) => {
+    if ("fills" in node && Array.isArray(node.fills)) collect(node.fills);
+    if ("strokes" in node && Array.isArray(node.strokes)) collect(node.strokes);
+    if (hasChildren(node)) {
+      for (const child of node.children) {
+        if (isSceneNode(child)) visit(child);
+      }
+    }
+  };
+
+  visit(root);
+  return bindings;
+}
+
+function restorePaintBindings(paints: readonly Paint[], bindings: readonly PaintVariableBinding[]): Paint[] {
+  if (bindings.length === 0) return [...paints];
+  return paints.map((paint) => {
+    const current = (paint as Paint & { boundVariables?: Record<string, VariableAlias> }).boundVariables;
+    if (current && Object.keys(current).length > 0) return paint;
+    const binding = bindings.find((candidate) => candidate.signature === paintSignature(paint));
+    return binding
+      ? ({ ...paint, boundVariables: { ...binding.boundVariables } } as Paint)
+      : paint;
+  });
+}
+
+function paintSignature(paint: Paint): string {
+  return JSON.stringify(stripVariableBindings(paint));
+}
+
+function stripVariableBindings(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripVariableBindings);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(record).sort()) {
+    if (key === "boundVariables") continue;
+    result[key] = stripVariableBindings(record[key]);
+  }
+  return result;
 }
 
 function isSettablePaint(paint: Paint): paint is SolidPaint | GradientPaint | ImagePaint | VideoPaint | ShaderPaint {
