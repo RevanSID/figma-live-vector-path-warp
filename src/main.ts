@@ -147,8 +147,10 @@ figma.showUI(__html__, { width: 320, height: 500, themeColors: true });
 
 figma.on("selectionchange", () => {
   if (isRendering) return;
+  const replacementSelected = resolveOutputReplacementSelection(figma.currentPage.selection);
   const restored = restoreLinkedOutputFromSelection();
   postSelectionStatus();
+  if (replacementSelected) return;
   scheduleRender(restored ? "output selection" : "selection", restored ? 20 : 140, restored);
 });
 
