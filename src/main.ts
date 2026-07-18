@@ -82,6 +82,7 @@ interface LinkedState {
   outputMeta?: OutputMeta;
   sourceFromOutput: boolean;
   targetFromOutput: boolean;
+  replaceSourceInPlace?: boolean;
 }
 
 interface OutputMeta {
@@ -116,6 +117,7 @@ interface RegionPart {
 
 interface PaintVariableBinding {
   signature: string;
+  kindSignature: string;
   boundVariables: Record<string, VariableAlias>;
 }
 
@@ -208,7 +210,8 @@ function startFromSelection() {
       outputId: replacement.frame.id,
       outputMeta: captureOutputMeta(replacement.frame),
       sourceFromOutput: false,
-      targetFromOutput: true
+      targetFromOutput: true,
+      replaceSourceInPlace: true
     };
     detachOutputOnNextRender = false;
     arrangeSnapshotsOnNextRender = false;
@@ -244,7 +247,8 @@ function startFromSelection() {
     outputId: linked?.outputId,
     outputMeta: linked?.outputMeta,
     sourceFromOutput: false,
-    targetFromOutput: false
+    targetFromOutput: false,
+    replaceSourceInPlace: false
   };
   detachOutputOnNextRender = linked.outputId !== undefined;
   arrangeSnapshotsOnNextRender = linked.outputId !== undefined;
@@ -366,6 +370,7 @@ async function renderLivePreview(_reason: string, force = false) {
     activeLink.outputMeta = captureOutputMeta(output.frame);
     activeLink.targetId = output.targetGuide.id;
     activeLink.targetFromOutput = true;
+    activeLink.replaceSourceInPlace = false;
     if (activeLink.sourceFromOutput) activeLink.sourceId = output.sourceSnapshot.id;
     lastRenderKey = buildRenderKey(activeLink.sourceId, activeLink.targetId, arcTable);
     if (arrangeSnapshotsOnNextRender) await arrangeSnapshotsRightOf(output.frame);
@@ -414,13 +419,15 @@ async function flattenSourceToVector(source: SceneNode): Promise<VectorNode> {
   clone.locked = false;
   clone.visible = true;
   clone.relativeTransform = sourceTransform;
+  disableAutoLayoutRecursively(clone);
   await copyResolvedVariableModes(source, clone);
   const background = await createContainerBackground(source);
-  const flattened = figma.flatten(background ? [clone, background] : [clone], figma.currentPage);
-  const topLevelOutlines = outlineStrokesBeforeFlatten(flattened);
-  return topLevelOutlines.length > 0
-    ? figma.flatten([flattened, ...topLevelOutlines], figma.currentPage)
-    : flattened;
+  const topLevelOutlines = outlineStrokesBeforeFlatten(clone);
+  // The last node in Figma's flatten input is rendered on top. Keep the
+  // container background behind the cloned source, otherwise it hides the
+  // Auto Layout contents and only the background survives the flatten.
+  const flattenInputs = background ? [background, clone, ...topLevelOutlines] : [clone, ...topLevelOutlines];
+  return figma.flatten(flattenInputs, figma.currentPage);
 }
 
 async function createOutputFrame(
@@ -435,9 +442,10 @@ async function createOutputFrame(
   const previousScene = previous && isSceneNode(previous) ? previous : null;
   const previousParent = previousScene?.parent && hasChildren(previousScene.parent) ? previousScene.parent : null;
   const previousIndex = previousParent && previousScene ? previousParent.children.indexOf(previousScene) : -1;
+  const forceSourceReplacement = linked?.replaceSourceInPlace === true;
   let keepPrevious = false;
   if (previous && "remove" in previous) {
-    keepPrevious = detachOutputOnNextRender || (previousScene !== null && isOutputTouched(previousScene));
+    keepPrevious = !forceSourceReplacement && (detachOutputOnNextRender || (previousScene !== null && isOutputTouched(previousScene)));
     if (keepPrevious) {
       if (detachOutputOnNextRender && previousScene) rememberAutoArrangeSnapshot(previousScene);
     }
@@ -449,6 +457,15 @@ async function createOutputFrame(
     target.parent?.id === previousScene.id
       ? target.absoluteTransform
       : null;
+  const previousEmbedded = previousScene?.type === "FRAME" ? findEmbeddedOutputParts(previousScene) : null;
+  const updateInPlace =
+    previousScene?.type === "FRAME" &&
+    !keepPrevious &&
+    linked?.targetFromOutput === true &&
+    previousParent !== null &&
+    previousIndex >= 0 &&
+    target.parent?.id === previousScene.id &&
+    (forceSourceReplacement || previousEmbedded?.targetGuide.id === target.id);
 
   const networkBounds = boundsFromNetwork(clipNetwork);
   const padding = 2;
@@ -459,7 +476,7 @@ async function createOutputFrame(
     [1, 0, frameOrigin.x],
     [0, 1, frameOrigin.y]
   ]);
-  const paintBindings = collectPaintVariableBindings(source);
+  const paintBindings = await collectPaintVariableBindings(source);
 
   const reuseOutputPlacement = linked?.targetFromOutput === true && previousParent !== null && previousIndex >= 0;
   const parent = reuseOutputPlacement
@@ -469,31 +486,47 @@ async function createOutputFrame(
       : figma.currentPage;
   const targetIndex = reuseOutputPlacement ? previousIndex : parent.children.indexOf(target);
 
-  const frame = figma.createFrame();
+  const frame = updateInPlace ? previousScene : figma.createFrame();
   frame.name = `${OUTPUT_NAME_PREFIX} - multi-tile - ${flattened.name.replace(" - warp source flatten", "")}`;
   frame.clipsContent = true;
   frame.fills = [];
   frame.strokes = [];
   frame.resizeWithoutConstraints(frameWidth, frameHeight);
   frame.relativeTransform = relativeTransformForParent(parent, frameAbsoluteTransform);
-  parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
+  if (!updateInPlace) {
+    parent.insertChild(Math.min(parent.children.length, targetIndex + 1), frame);
+  } else {
+    // Keep the existing output frame and its editable path. Rebuilding the
+    // frame itself breaks source replacement and makes the path appear to
+    // jump to a new location.
+    for (const child of [...frame.children]) {
+      if (child.id !== target.id) child.remove();
+    }
+    frame.appendChild(target);
+    target.name = OUTPUT_TARGET_NAME;
+    target.locked = false;
+    target.visible = true;
+    target.relativeTransform = relativeTransformForParent(frame, reusableTargetTransform ?? target.absoluteTransform);
+    frame.insertChild(0, target);
+  }
   await copyResolvedVariableModes(source, frame);
+  await copySourceAppearance(source, frame);
 
   const sourceSnapshot = cloneSceneNodeIntoParent(source, frame, buildSourceSnapshotName(settings), false, { x: 4, y: 4 });
-  const targetGuide = reusableTargetTransform
+  const targetGuide = updateInPlace || reusableTargetTransform
     ? target
     : cloneSceneNodeIntoParent(target, frame, OUTPUT_TARGET_NAME, true);
   if (targetGuide.type !== "VECTOR") throw new Error("The embedded editable path must remain a vector node.");
-  if (reusableTargetTransform) {
+  if (updateInPlace || reusableTargetTransform) {
     frame.appendChild(targetGuide);
     targetGuide.locked = false;
     targetGuide.name = OUTPUT_TARGET_NAME;
     targetGuide.visible = true;
-    targetGuide.relativeTransform = relativeTransformForParent(frame, reusableTargetTransform);
+    targetGuide.relativeTransform = relativeTransformForParent(frame, reusableTargetTransform ?? target.absoluteTransform);
   }
   frame.insertChild(0, targetGuide);
 
-  if (previous && !keepPrevious) previous.remove();
+  if (previous && !keepPrevious && !updateInPlace) previous.remove();
 
   const parts = buildTileStackedParts(warpedPieces, flattened, skipRegionCount);
   flattened.remove();
@@ -509,8 +542,9 @@ async function createOutputFrame(
     ];
     const localizedNetwork = await normalizeVectorNetworkPaints(translateNetwork(part.network, -frameOrigin.x, -frameOrigin.y));
     await vector.setVectorNetworkAsync(localizedNetwork);
-    vector.fills = part.fills ? restorePaintBindings(part.fills, paintBindings) : [];
-    vector.strokes = part.strokes ? restorePaintBindings(part.strokes, paintBindings) : [];
+    vector.fills = part.fills ? await restorePaintBindings(part.fills, paintBindings) : [];
+    vector.strokes = part.strokes ? await restorePaintBindings(part.strokes, paintBindings) : [];
+    await copyResolvedVariableModes(source, vector);
   }
 
   frame.expanded = true;
@@ -633,10 +667,13 @@ async function createContainerBackground(source: SceneNode): Promise<RectangleNo
   if (!Array.isArray(source.fills) || source.fills.length === 0) return null;
   if (source.fills.every((fill) => fill.visible === false)) return null;
 
+  const fills = sanitizePaints(source.fills);
+  if (fills.length === 0 || fills.every((fill) => fill.visible === false)) return null;
+
   const background = figma.createRectangle();
   background.name = `${source.name} - flatten background`;
   background.resizeWithoutConstraints(source.width, source.height);
-  background.fills = source.fills;
+  background.fills = fills;
   background.strokes = [];
   figma.currentPage.appendChild(background);
   background.relativeTransform = source.absoluteTransform;
@@ -732,6 +769,53 @@ function buildPathEnvelopeNetwork(arcTable: ArcTable, height: number): VectorNet
   };
 }
 
+type LayoutModeNode = SceneNode & {
+  layoutMode: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";
+};
+
+function disableAutoLayoutRecursively(root: SceneNode) {
+  const visit = (node: SceneNode) => {
+    if ("layoutMode" in node) {
+      const layoutNode = node as LayoutModeNode;
+      if (layoutNode.layoutMode !== "NONE") {
+        try {
+          layoutNode.layoutMode = "NONE";
+        } catch {
+          // Instances and library-owned descendants can reject layout edits.
+        }
+      }
+    }
+    if (hasChildren(node)) {
+      for (const child of node.children) {
+        if (isSceneNode(child)) visit(child);
+      }
+    }
+  };
+
+  visit(root);
+}
+
+async function copySourceAppearance(source: SceneNode, target: SceneNode) {
+  if ("opacity" in source && "opacity" in target) {
+    target.opacity = source.opacity;
+    await copyNodeVariable(source, target, "opacity");
+  }
+  if ("blendMode" in source && "blendMode" in target) target.blendMode = source.blendMode;
+  if ("effects" in source && "effects" in target) target.effects = source.effects;
+}
+
+async function copyNodeVariable(source: SceneNode, target: SceneNode, field: "opacity") {
+  const boundVariables = (source as SceneNode & { boundVariables?: Record<string, VariableAlias> }).boundVariables;
+  const alias = boundVariables?.[field];
+  if (!alias) return;
+  try {
+    const variable = await figma.variables.getVariableByIdAsync(alias.id);
+    if (variable) target.setBoundVariable(field, variable);
+  } catch {
+    // A deleted or inaccessible variable should not block the warp.
+  }
+}
+
 async function normalizeVectorNetworkPaints(network: VectorNetwork): Promise<VectorNetwork> {
   const regions: VectorRegion[] = [];
   for (const region of network.regions ?? []) {
@@ -750,10 +834,17 @@ function sanitizePaints(paints: readonly Paint[]): Paint[] {
 }
 
 async function copyResolvedVariableModes(source: SceneNode, target: SceneNode) {
-  for (const [collectionId, modeId] of Object.entries(source.resolvedVariableModes)) {
-    const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
-    if (!collection) continue;
+  let resolvedModes: Record<string, string>;
+  try {
+    resolvedModes = source.resolvedVariableModes;
+  } catch {
+    return;
+  }
+
+  for (const [collectionId, modeId] of Object.entries(resolvedModes)) {
     try {
+      const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+      if (!collection) continue;
       target.setExplicitVariableModeForCollection(collection, modeId);
     } catch {
       // A deleted or inaccessible collection should not block the warp.
@@ -761,50 +852,99 @@ async function copyResolvedVariableModes(source: SceneNode, target: SceneNode) {
   }
 }
 
-function collectPaintVariableBindings(root: SceneNode): PaintVariableBinding[] {
+async function collectPaintVariableBindings(root: SceneNode): Promise<PaintVariableBinding[]> {
   const bindings: PaintVariableBinding[] = [];
   const seen = new Set<string>();
 
-  const collect = (paints: readonly Paint[]) => {
-    for (const paint of paints) {
-      const boundVariables = (paint as Paint & { boundVariables?: Record<string, VariableAlias> }).boundVariables;
-      if (!boundVariables || Object.keys(boundVariables).length === 0) continue;
+  const collect = (paints: readonly Paint[], inferredAliases?: readonly (readonly VariableAlias[])[]) => {
+    paints.forEach((paint, paintIndex) => {
+      const explicitVariables = (paint as Paint & { boundVariables?: Record<string, VariableAlias> }).boundVariables;
+      const inferredColor = inferredAliases?.[paintIndex]?.length === 1 ? { color: inferredAliases[paintIndex][0] } : undefined;
+      const boundVariables = explicitVariables ?? inferredColor;
+      if (!boundVariables || Object.keys(boundVariables).length === 0) return;
       const signature = paintSignature(paint);
       const key = `${signature}|${JSON.stringify(boundVariables)}`;
-      if (seen.has(key)) continue;
+      if (seen.has(key)) return;
       seen.add(key);
-      bindings.push({ signature, boundVariables: { ...boundVariables } });
-    }
+      bindings.push({ signature, kindSignature: paintKindSignature(paint), boundVariables: { ...boundVariables } });
+    });
   };
 
-  const visit = (node: SceneNode) => {
-    if ("fills" in node && Array.isArray(node.fills)) collect(node.fills);
-    if ("strokes" in node && Array.isArray(node.strokes)) collect(node.strokes);
+  const visit = async (node: SceneNode) => {
+    const inferredVariables = (node as SceneNode & {
+      inferredVariables?: { fills?: VariableAlias[][]; strokes?: VariableAlias[][] };
+    }).inferredVariables;
+    if ("fills" in node && Array.isArray(node.fills)) collect(node.fills, inferredVariables?.fills);
+    if ("strokes" in node && Array.isArray(node.strokes)) collect(node.strokes, inferredVariables?.strokes);
+
+    for (const styleField of ["fillStyleId", "strokeStyleId"] as const) {
+      if (!(styleField in node)) continue;
+      const styleId = (node as SceneNode & Record<typeof styleField, unknown>)[styleField];
+      if (typeof styleId !== "string" || styleId.length === 0) continue;
+      try {
+        const style = await figma.getStyleByIdAsync(styleId);
+        if (style?.type === "PAINT") collect(style.paints);
+      } catch {
+        // A deleted or inaccessible style should not block the warp.
+      }
+    }
+
     if (hasChildren(node)) {
       for (const child of node.children) {
-        if (isSceneNode(child)) visit(child);
+        if (isSceneNode(child)) await visit(child);
       }
     }
   };
 
-  visit(root);
+  await visit(root);
   return bindings;
 }
 
-function restorePaintBindings(paints: readonly Paint[], bindings: readonly PaintVariableBinding[]): Paint[] {
+async function restorePaintBindings(paints: readonly Paint[], bindings: readonly PaintVariableBinding[]): Promise<Paint[]> {
   if (bindings.length === 0) return [...paints];
-  return paints.map((paint) => {
+  const restoredPaints: Paint[] = [];
+  for (const paint of paints) {
     const current = (paint as Paint & { boundVariables?: Record<string, VariableAlias> }).boundVariables;
-    if (current && Object.keys(current).length > 0) return paint;
-    const binding = bindings.find((candidate) => candidate.signature === paintSignature(paint));
-    return binding
-      ? ({ ...paint, boundVariables: { ...binding.boundVariables } } as Paint)
-      : paint;
-  });
+    if (current && Object.keys(current).length > 0) {
+      restoredPaints.push(paint);
+      continue;
+    }
+    const exactMatches = bindings.filter((candidate) => candidate.signature === paintSignature(paint));
+    const kindMatches = bindings.filter((candidate) => candidate.kindSignature === paintKindSignature(paint));
+    const binding = exactMatches.length === 1 ? exactMatches[0] : kindMatches.length === 1 ? kindMatches[0] : undefined;
+    if (!binding || paint.type !== "SOLID") {
+      restoredPaints.push(paint);
+      continue;
+    }
+
+    let restored = paint;
+    const colorAlias = binding.boundVariables.color;
+    if (colorAlias) {
+      try {
+        const variable = await figma.variables.getVariableByIdAsync(colorAlias.id);
+        if (variable) restored = figma.variables.setBoundVariableForPaint(restored, "color", variable);
+      } catch {
+        // A deleted or inaccessible variable should not block the warp.
+      }
+    }
+    restoredPaints.push(restored);
+  }
+  return restoredPaints;
 }
 
 function paintSignature(paint: Paint): string {
   return JSON.stringify(stripVariableBindings(paint));
+}
+
+function paintKindSignature(paint: Paint): string {
+  const stripped = stripVariableBindings(paint);
+  if (!stripped || typeof stripped !== "object" || Array.isArray(stripped)) return JSON.stringify(stripped);
+  const record = { ...(stripped as Record<string, unknown>) };
+  delete record.color;
+  delete record.gradientStops;
+  delete record.imageRef;
+  delete record.imageTransform;
+  return JSON.stringify(record);
 }
 
 function stripVariableBindings(value: unknown): unknown {
@@ -1870,7 +2010,8 @@ function restoreLinkedOutputFromSelection(): boolean {
     outputId: frame.id,
     outputMeta: captureOutputMeta(frame),
     sourceFromOutput: true,
-    targetFromOutput: true
+    targetFromOutput: true,
+    replaceSourceInPlace: false
   };
   detachOutputOnNextRender = false;
   arrangeSnapshotsOnNextRender = false;

@@ -15,6 +15,8 @@ The plugin is designed for pattern-brush-like workflows: a source layer is flatt
 - Live preview while editing the selected path.
 - Source support for vectors, frames, groups, components, and instances that can be flattened by Figma.
 - Stroke-to-vector conversion with Figma's native `outlineStroke()` API before deformation.
+- Preserves the source's effective variable modes and nested variable-mode overrides while preparing a preview.
+- Freezes source geometry and disables Auto Layout on the temporary clone before outlining and flattening.
 - Fixed high-quality source geometry subdivision and separate path-smoothing control.
 - Scale/thickness and tile-scale ratio lock.
 - Pattern offset control for shifting the repeat phase along the target path.

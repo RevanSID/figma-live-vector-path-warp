@@ -67,6 +67,19 @@
         border-radius: 28px;
       }
 
+      .version-label {
+        position: absolute;
+        right: 8px;
+        bottom: 5px;
+        z-index: 3;
+        color: rgba(255, 255, 255, 0.38);
+        font-size: 9px;
+        line-height: 1;
+        letter-spacing: 0.02em;
+        pointer-events: none;
+        user-select: none;
+      }
+
       .warp-preview {
         position: absolute;
         z-index: 0;
@@ -545,6 +558,8 @@
 
         <button id="start" type="button"><span>Start</span></button>
       </div>
+
+      <span class="version-label" aria-label="Plugin version">v1.22</span>
     </main>
 
     <!-- UI_SCRIPT -->
